@@ -29,9 +29,15 @@ HEADERS=src/libs/types.h src/libs/string.h src/libs/mem.h src/libs/ctype.h src/a
 REPL_SRC=repl/repl.c
 REPL_BIN=$(OUT)/repl
 
+ifeq ($(ARCH),x86_64)
 all: out/x86_64.so out/aarch64.so out/multiarch.jar test_runner
-	rm -rf out/x86_64 out/aarch64
+	@rm -rf out/x86_64 out/aarch64
 	@echo "out:" && ls -lh out 2>&1 | head -20
+else
+all: out/x86_64.so out/aarch64.so out/multiarch.jar
+	@rm -rf out/x86_64 out/aarch64
+	@echo "out:" && ls -lh out 2>&1 | head -20
+endif
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -59,7 +65,7 @@ $(REPL_BIN): $(OBJS) | $(OUT)
 	$(CC) $(CFLAGS_TEST) $(REPL_SRC) $(OBJS) -o $@
 
 out/x86_64.so:
-	$(MAKE) ARCH=x86_64 BUILD_DIR=build/x86_64 OUT=out/x86_64 $(OUT)/librsc.so
+	$(MAKE) ARCH=x86_64 BUILD_DIR=build/x86_64 OUT=out/x86_64 out/x86_64/librsc.so
 	mkdir -p out
 	cp out/x86_64/librsc.so out/x86_64.so
 
