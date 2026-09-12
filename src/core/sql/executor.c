@@ -2,6 +2,7 @@
 #include "../btree.h"
 #include "../../libs/string.h"
 #include "../../libs/ctype.h"
+#include "../../arch/arch.h"
 static int find_table(Db *db,const char *name){ for(int i=0;i<db->ntables;i++) if(rsc_strcmp(db->tables[i].name,name)==0) return i; return -1; }
 static u64 enc_key_rowid(u64 id, u8 *out){ for(int i=7;i>=0;i--) out[i]=id&0xFF, id>>=8; return 8; }
 static int eval_where(Table *t, u8 *row, WhereClause *w){
@@ -67,7 +68,61 @@ static void scan_cb(const void *k,u16 kl,const void *v,u16 vl,void *ctx){
     static u8 store[256][1024];
     if(c->nrows<256){ rsc_memcpy(store[c->nrows],v,vl); c->rows[c->nrows]=store[c->nrows]; c->lens[c->nrows]=vl; c->nrows++; }
 }
+int db_open(Db *db, const char *path);
+int db_close(Db *db);
+int rsc_dump_all(const char *p);
+int rsc_load_all(const char *p);
 int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
+    if(s->kind==STMT_DUMP_ALL){
+        if(db->has_pending){
+            int f1=arch_open(db->pending_path,ARCH_O_RDONLY,0);
+            int f2=arch_open(db->pending_target,ARCH_O_RDWR|ARCH_O_CREAT|ARCH_O_TRUNC,0644);
+            if(f1>=0&&f2>=0){ char b[4096]; i64 r; while((r=arch_read(f1,b,4096))>0) arch_write(f2,b,(usize)r); arch_close(f1); arch_close(f2); }
+            else { if(f1>=0) arch_close(f1); if(f2>=0) arch_close(f2); }
+            pager_sync(db->pager);
+            db->has_pending=0;
+        } else {
+            pager_sync(db->pager);
+        }
+        if(s->table[0]){
+            if(rsc_dump_all(s->table)!=0) return -1;
+        } else {
+            if(rsc_dump_all("state.rsc.dump")!=0) return -1;
+        }
+        if(out&&cap) rsc_strcpy(out,"OK dumped\n"); return 0;
+    }
+    if(s->kind==STMT_LOAD_ALL){
+        if(rsc_load_all(s->table[0]?s->table:"state.rsc.dump")!=0) return -1;
+        if(out&&cap) rsc_strcpy(out,"OK loaded\n"); return 0;
+    }
+    if(s->kind==STMT_CREATE_DB){
+        char target[128]={0}; rsc_strcpy(target,s->table); rsc_strcpy(target+rsc_strlen(target),".rsc.db");
+        char tmp[128]={0}; rsc_strcpy(tmp,"/tmp/"); rsc_strcpy(tmp+5,s->table); rsc_strcpy(tmp+rsc_strlen(tmp),".pending.rsc.db");
+        db_close(db);
+        if(pager_open(db->pager,tmp)!=0) return -1;
+        rsc_strcpy(db->pending_path,tmp); rsc_strcpy(db->pending_target,target); db->has_pending=1;
+        db->ntables=0; rsc_memset(db->tables,0,sizeof(db->tables));
+        if(out&&cap){ rsc_strcpy(out,"OK\n"); } return 0;
+    }
+    if(s->kind==STMT_DROP_DB){
+        char path[128]={0}; rsc_strcpy(path,s->table); rsc_strcpy(path+rsc_strlen(path),".rsc.db");
+        arch_unlink(path);
+        if(out&&cap){ rsc_strcpy(out,"OK\n"); } return 0;
+    }
+    if(s->kind==STMT_USE){
+        char path[128]={0}; rsc_strcpy(path,s->table); rsc_strcpy(path+rsc_strlen(path),".rsc.db");
+        if(db->has_pending && rsc_strcmp(db->pending_target,path)==0){
+            if(out&&cap){ rsc_strcpy(out,"OK using "); rsc_strcpy(out+rsc_strlen(out),s->table); rsc_strcpy(out+rsc_strlen(out),"\n"); } return 0;
+        }
+        db_close(db);
+        int fd=arch_open(path,ARCH_O_RDONLY,0);
+        if(fd>=0){ arch_close(fd); }
+        else {
+            if(out&&cap){ rsc_strcpy(out,"ERR no such database\n"); } return -1;
+        }
+        if(db_open(db,path)!=0) return -1;
+        if(out&&cap){ rsc_strcpy(out,"OK using "); rsc_strcpy(out+rsc_strlen(out),s->table); rsc_strcpy(out+rsc_strlen(out),"\n"); } return 0;
+    }
     if(s->kind==STMT_CREATE){
         if(db->ntables>=SQL_MAX_TABLES) return -1;
         if(find_table(db,s->table)>=0) return -1;
@@ -125,10 +180,48 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
                 }
             }
         }
-        usize off=0;
         int lim = s->has_limit? s->limit : ctx.nrows;
         if(lim>ctx.nrows) lim=ctx.nrows;
-        for(int i=0;i<lim;i++) append_row_text(t,ctx.rows[i],ctx.lens[i],out,cap,&off);
+        int widths[SQL_MAX_COLS]={0};
+        for(int c=0;c<t->ncols;c++) widths[c]=(int)rsc_strlen(t->cols[c].name);
+        char cells[256][16][64];
+        for(int r=0;r<lim;r++){
+            u8 *row=ctx.rows[r];
+            u8 *p=row;
+            for(int c=0;c<t->ncols;c++){
+                char *dst=cells[r][c];
+                if(t->cols[c].type==COL_INT){
+                    i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8);
+                    int pos=0; int neg=0; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) dst[pos++]=rev[k]; dst[pos]=0; p+=8;
+                } else { u16 l=*(u16*)p; if(l>63) l=63; rsc_memcpy(dst,p+2,l); dst[l]=0; p+=2+l; }
+                int cl=(int)rsc_strlen(dst);
+                if(cl>widths[c]) widths[c]=cl;
+            }
+        }
+        usize off=0;
+        #define OUTC(c) do{ if(off+1<cap) out[off++]=c; }while(0)
+        #define OUTS(s) do{ usize _l=rsc_strlen(s); if(off+_l<cap){ rsc_memcpy(out+off,s,_l); off+=_l; } }while(0)
+        #define OUTN(s,n) do{ if(off+(n)<cap){ rsc_memcpy(out+off,s,n); off+=n; } }while(0)
+        if(lim==0 && ctx.nrows==0){
+            OUTS("(empty)\n"); if(off<cap) out[off]=0; else out[cap-1]=0; return 0;
+        }
+        for(int c=0;c<t->ncols;c++){ OUTC('+'); for(int k=0;k<widths[c]+2;k++) OUTC('-'); } OUTC('+'); OUTC('\n');
+        for(int c=0;c<t->ncols;c++){
+            OUTC('|'); OUTC(' ');
+            OUTS(t->cols[c].name);
+            for(int k=(int)rsc_strlen(t->cols[c].name);k<widths[c];k++) OUTC(' ');
+            OUTC(' ');
+        } OUTC('|'); OUTC('\n');
+        for(int c=0;c<t->ncols;c++){ OUTC('+'); for(int k=0;k<widths[c]+2;k++) OUTC('-'); } OUTC('+'); OUTC('\n');
+        for(int r=0;r<lim;r++){
+            for(int c=0;c<t->ncols;c++){
+                OUTC('|'); OUTC(' ');
+                OUTS(cells[r][c]);
+                for(int k=(int)rsc_strlen(cells[r][c]);k<widths[c];k++) OUTC(' ');
+                OUTC(' ');
+            } OUTC('|'); OUTC('\n');
+        }
+        for(int c=0;c<t->ncols;c++){ OUTC('+'); for(int k=0;k<widths[c]+2;k++) OUTC('-'); } OUTC('+'); OUTC('\n');
         if(off<cap) out[off]=0; else out[cap-1]=0;
         return 0;
     }

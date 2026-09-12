@@ -13,7 +13,7 @@ CFLAGS_CORE=-Wall -Wextra -O2 -ffreestanding -nostdlib -nostdinc -fno-builtin -I
 CFLAGS_TEST=-Wall -Wextra -O2 -Isrc -g
 SRC_LIBS=src/libs/string.c src/libs/mem.c
 SRC_ARCH=src/arch/linux/arch.c
-SRC_CORE=src/core/pager.c src/core/btree.c src/core/txn.c src/core/sql/parser.c src/core/sql/executor.c src/core/sql/db.c
+SRC_CORE=src/core/pager.c src/core/btree.c src/core/txn.c src/core/dump.c src/core/sql/parser.c src/core/sql/executor.c src/core/sql/db.c
 OBJ_LIBS=$(SRC_LIBS:.c=.o)
 OBJ_ARCH=$(SRC_ARCH:.c=.o)
 OBJ_CORE=$(SRC_CORE:.c=.o)
@@ -23,9 +23,12 @@ OUT=out/$(ARCH)
 LIB_A=$(OUT)/librsc.a
 LIB_SO=$(OUT)/librsc.so
 
-HEADERS=src/libs/types.h src/libs/string.h src/libs/mem.h src/libs/ctype.h src/arch/arch.h src/core/pager.h src/core/btree.h src/core/txn.h src/core/sql/sql.h
+HEADERS=src/libs/types.h src/libs/string.h src/libs/mem.h src/libs/ctype.h src/arch/arch.h src/core/pager.h src/core/btree.h src/core/txn.h src/core/dump.h src/core/sql/sql.h
 
-all: $(LIB_A) $(LIB_SO) headers test_runner
+REPL_SRC=repl/repl.c
+REPL_BIN=$(OUT)/repl
+
+all: $(LIB_A) $(LIB_SO) headers test_runner $(REPL_BIN)
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -54,6 +57,9 @@ $(LIB_SO): $(OBJS) | $(OUT)
 
 test_runner: $(LIB_A) test/test.c
 	$(CC) $(CFLAGS_TEST) test/test.c $(LIB_A) -o test_runner
+
+$(REPL_BIN): $(LIB_A) $(REPL_SRC) | $(OUT)
+	$(CC) $(CFLAGS_TEST) $(REPL_SRC) $(LIB_A) -o $@
 
 clean:
 	rm -rf out src/libs/*.o src/arch/linux/*.o src/core/*.o src/core/sql/*.o test_runner demo /tmp/test.rsc.db /tmp/bt_test.rsc.db

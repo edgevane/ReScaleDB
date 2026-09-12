@@ -15,6 +15,7 @@ int arch_ftruncate(int fd, u64 len);
 i64 arch_lseek(int fd, i64 off, int whence);
 i64 arch_read(int fd, void *buf, usize n);
 i64 arch_write(int fd, const void *buf, usize n);
+int arch_unlink(const char *path);
 #define ARCH_O_RDONLY 0
 #define ARCH_O_WRONLY 1
 #define ARCH_O_RDWR 2

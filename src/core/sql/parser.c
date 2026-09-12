@@ -40,15 +40,73 @@ int sql_parse(const char *sql, Stmt *out){
         } else if(eqi(second,"index")){
             out->kind=STMT_CREATE_IDX;
             p=skip_sp(p); i=0; while(*p&&!rsc_isspace(*p)&&i<31) out->idx_name[i++]=*p++; out->idx_name[i]=0;
-            // expect ON
-            // skip to table
             while(*p&&rsc_isspace(*p)) p++;
-            // skip "on"
             char tmp[8]={0}; int ti=0; const char *qq=p; while(*qq&&!rsc_isspace(*qq)&&ti<7) tmp[ti++]=rsc_tolower(*qq++); if(eqi(tmp,"on")) p=qq;
             p=skip_sp(p); i=0; while(*p&&!rsc_isspace(*p)&&*p!='('&&i<31) out->table[i++]=*p++; out->table[i]=0;
             const char *qq2=p; while(*qq2&&*qq2!='(') qq2++; if(*qq2=='('){ qq2++; qq2=skip_sp(qq2); i=0; while(*qq2&&*qq2!=')'&&i<31) out->idx_col[i++]=*qq2++; out->idx_col[i]=0; }
             return 0;
+        } else if(eqi(second,"database")){
+            out->kind=STMT_CREATE_DB;
+            p=skip_sp(p); i=0; while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<31) out->table[i++]=*p++; out->table[i]=0;
+            for(int k=0;out->table[k];k++) if(out->table[k]==';'){ out->table[k]=0; break; }
+            trim(out->table);
+            return 0;
         }
+    } else if(eqi(first,"drop")){
+        p=skip_sp(p); char second2[16]={0}; i=0; while(*p&&!rsc_isspace(*p)&&i<15) second2[i++]=rsc_tolower(*p++); second2[i]=0;
+        if(eqi(second2,"database")){
+            out->kind=STMT_DROP_DB;
+            p=skip_sp(p); i=0; while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<31) out->table[i++]=*p++; out->table[i]=0;
+            for(int k=0;out->table[k];k++) if(out->table[k]==';'){ out->table[k]=0; break; }
+            trim(out->table); return 0;
+        }
+    } else if(eqi(first,"use")){
+        out->kind=STMT_USE;
+        p=skip_sp(p); i=0; while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<31) out->table[i++]=*p++; out->table[i]=0;
+        for(int k=0;out->table[k];k++) if(out->table[k]==';'){ out->table[k]=0; break; }
+        trim(out->table); return 0;
+    } else if(eqi(first,"dump")){
+        out->kind=STMT_DUMP_ALL;
+        p=skip_sp(p);
+        if(*p=='\'' || *p==0){ }
+        else {
+            const char *q=p; char tmp2[16]={0}; i=0; while(*q&&!rsc_isspace(*q)&&i<15) tmp2[i++]=rsc_tolower(*q++); tmp2[i]=0;
+            if(eqi(tmp2,"all")){
+                p=q; p=skip_sp(p);
+                if(*p!='\'' && *p!=0 && *p!=';'){
+                    const char *r=p; char to[8]={0}; int ti=0; while(*r&&!rsc_isspace(*r)&&ti<7) to[ti++]=rsc_tolower(*r++); to[ti]=0;
+                    if(eqi(to,"to")){ p=r; p=skip_sp(p); }
+                }
+            } else if(eqi(tmp2,"to")){
+                p=q; p=skip_sp(p);
+            } else if(tmp2[0]){
+                p=q;
+            }
+        }
+        p=skip_sp(p);
+        if(*p=='\''){ p++; i=0; while(*p&&*p!='\''&&i<31) out->table[i++]=*p++; out->table[i]=0; if(*p=='\'') p++; } else { i=0; while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<31) out->table[i++]=*p++; out->table[i]=0; for(int k=0;out->table[k];k++) if(out->table[k]==';'){ out->table[k]=0; break; } }
+        trim(out->table); return 0;
+    } else if(eqi(first,"load")){
+        out->kind=STMT_LOAD_ALL;
+        p=skip_sp(p);
+        if(*p=='\'' || *p==0){ }
+        else {
+            const char *q=p; char tmp2[16]={0}; i=0; while(*q&&!rsc_isspace(*q)&&i<15) tmp2[i++]=rsc_tolower(*q++); tmp2[i]=0;
+            if(eqi(tmp2,"all")){
+                p=q; p=skip_sp(p);
+                if(*p!='\'' && *p!=0 && *p!=';'){
+                    const char *r=p; char from[8]={0}; int ti=0; while(*r&&!rsc_isspace(*r)&&ti<7) from[ti++]=rsc_tolower(*r++); from[ti]=0;
+                    if(eqi(from,"from")){ p=r; p=skip_sp(p); }
+                }
+            } else if(eqi(tmp2,"from")){
+                p=q; p=skip_sp(p);
+            } else if(tmp2[0]){
+                p=q;
+            }
+        }
+        p=skip_sp(p);
+        if(*p=='\''){ p++; i=0; while(*p&&*p!='\''&&i<31) out->table[i++]=*p++; out->table[i]=0; if(*p=='\'') p++; } else { i=0; while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<31) out->table[i++]=*p++; out->table[i]=0; for(int k=0;out->table[k];k++) if(out->table[k]==';'){ out->table[k]=0; break; } }
+        trim(out->table); return 0;
     } else if(eqi(first,"insert")){
         out->kind=STMT_INSERT;
         // find INTO

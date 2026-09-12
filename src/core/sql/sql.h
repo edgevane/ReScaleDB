@@ -6,7 +6,7 @@
 typedef enum { COL_INT, COL_TEXT } ColType;
 typedef struct { char name[32]; ColType type; } Column;
 typedef struct { char name[32]; Column cols[SQL_MAX_COLS]; int ncols; u64 root; u64 rowid_seq; } Table;
-typedef enum { STMT_CREATE, STMT_INSERT, STMT_SELECT, STMT_UPDATE, STMT_DELETE, STMT_CREATE_IDX, STMT_UNKNOWN } StmtKind;
+typedef enum { STMT_CREATE, STMT_INSERT, STMT_SELECT, STMT_UPDATE, STMT_DELETE, STMT_CREATE_IDX, STMT_CREATE_DB, STMT_DROP_DB, STMT_USE, STMT_DUMP_ALL, STMT_LOAD_ALL, STMT_UNKNOWN } StmtKind;
 typedef struct { char col[32]; char op[3]; char val[64]; } WhereClause;
 typedef struct {
     StmtKind kind;
@@ -19,7 +19,7 @@ typedef struct {
     char idx_name[32]; char idx_col[32];
     Table *bound_table;
 } Stmt;
-typedef struct { Pager *pager; Table tables[SQL_MAX_TABLES]; int ntables; } Db;
+typedef struct { Pager *pager; Table tables[SQL_MAX_TABLES]; int ntables; char pending_path[128]; char pending_target[128]; int has_pending; } Db;
 int db_open(Db *db, const char *path);
 int db_close(Db *db);
 int db_exec(Db *db, const char *sql, char *out, usize out_cap);

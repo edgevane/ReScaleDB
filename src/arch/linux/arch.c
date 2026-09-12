@@ -10,6 +10,7 @@
 #define SYS_lseek 62
 #define SYS_read 63
 #define SYS_write 64
+#define SYS_unlinkat 35
 #else
 #define SYS_openat 257
 #define SYS_close 3
@@ -20,6 +21,7 @@
 #define SYS_lseek 8
 #define SYS_read 0
 #define SYS_write 1
+#define SYS_unlinkat 263
 #endif
 #define AT_FDCWD -100
 void *arch_mmap(void *addr, usize len, int prot, int flags, int fd, u64 off){
@@ -35,3 +37,4 @@ int arch_ftruncate(int fd,u64 len){return (int)arch_syscall3(SYS_ftruncate,fd,(l
 i64 arch_lseek(int fd,i64 off,int whence){return arch_syscall4(SYS_lseek,fd,(long)off,whence,0);}
 i64 arch_read(int fd,void *buf,usize n){return arch_syscall3(SYS_read,fd,(long)buf,(long)n);}
 i64 arch_write(int fd,const void *buf,usize n){return arch_syscall3(SYS_write,fd,(long)buf,(long)n);}
+int arch_unlink(const char *path){ long ret=arch_syscall4(SYS_unlinkat,AT_FDCWD,(long)path,0,0); if(ret<0&&ret>-4096) return -1; return 0; }
