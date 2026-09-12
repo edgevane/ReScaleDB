@@ -36,7 +36,7 @@ publishing {
             pom {
                 name = 'ReScaleDB'
                 description = project.description
-                url = 'https://github.com/anomalyco/ReScaleDB'
+                url = 'https://github.com/edgevane/ReScaleDB'
                 licenses {
                     license {
                         name = 'MIT License'
@@ -45,12 +45,12 @@ publishing {
                 }
                 developers {
                     developer {
-                        id = 'anom'
+                        id = 'aplominski'
                         name = 'Aleksander Plominski'
                     }
                 }
                 scm {
-                    url = 'https://github.com/anomalyco/ReScaleDB'
+                    url = 'https://github.com/edgevane/ReScaleDB'
                 }
             }
         }
@@ -62,7 +62,7 @@ publishing {
         }
         maven {
             name = "central"
-            url = "https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/"
+            url = "https://central.sonatype.com/api/v1/publisher/deployments/upload"
             credentials {
                 username = System.getenv("MAVEN_USERNAME")
                 password = System.getenv("MAVEN_PASSWORD")
