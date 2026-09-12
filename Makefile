@@ -61,7 +61,19 @@ test_runner: $(LIB_A) test/test.c
 $(REPL_BIN): $(LIB_A) $(REPL_SRC) | $(OUT)
 	$(CC) $(CFLAGS_TEST) $(REPL_SRC) $(LIB_A) -o $@
 
+rust:
+	cargo build --manifest-path bindings/rust/Cargo.toml
+
+rust-tests: rust
+	cargo test --manifest-path bindings/rust/Cargo.toml
+
+rust_tests: rust-tests
+
+tests: test_runner
+	./test_runner
+
 clean:
 	rm -rf out src/libs/*.o src/arch/linux/*.o src/core/*.o src/core/sql/*.o test_runner demo /tmp/test.rsc.db /tmp/bt_test.rsc.db
+	cargo clean --manifest-path bindings/rust/Cargo.toml 2>/dev/null; true
 
-.PHONY: all clean
+.PHONY: all clean rust rust-tests rust_tests tests

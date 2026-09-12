@@ -28,3 +28,11 @@ int db_init(Db *db);
 int db_close(Db *db);
 int db_exec(Db *db, const char *sql, char *out, usize out_cap);
 int sql_parse(const char *sql, Stmt *out);
+#define RSC_MAX_ROWS 256
+typedef struct {
+    int ncols;
+    char cols[16][32];
+    int nrows;
+    char cells[256][16][64];
+} RscResult;
+int db_query(Db *db, const char *sql, RscResult *res);

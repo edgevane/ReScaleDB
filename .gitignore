@@ -1,3 +1,4 @@
 test_runner
 out/
 *.o
+bindings/rust/target

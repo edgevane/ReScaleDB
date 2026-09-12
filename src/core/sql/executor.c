@@ -304,3 +304,61 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
     }
     return -1;
 }
+int db_query(Db *db, const char *sql, RscResult *res){
+    rsc_memset(res,0,sizeof(*res));
+    Stmt s; if(sql_parse(sql,&s)!=0) return -1;
+    if(s.kind!=STMT_SELECT) return -1;
+    int idx=find_table(db,s.table); if(idx<0) return -1;
+    Table *t=&db->tables[idx];
+    ScanCtx ctx; rsc_memset(&ctx,0,sizeof(ctx)); ctx.db=db; ctx.t=t; ctx.st=&s;
+    btree_scan(db->pager,t->root,scan_cb,&ctx);
+    if(s.has_order){
+        int oidx=-1; for(int i=0;i<t->ncols;i++) if(rsc_strcmp(t->cols[i].name,s.order_by)==0) oidx=i;
+        if(oidx>=0){
+            for(int i=0;i<ctx.nrows;i++) for(int j=i+1;j<ctx.nrows;j++){
+                u8 *pa=ctx.rows[i],*pb=ctx.rows[j];
+                for(int k=0;k<oidx;k++){ if(t->cols[k].type==COL_INT) pa+=8,pb+=8; else {u16 la=*(u16*)pa,lb=*(u16*)pb; pa+=2+la; pb+=2+lb; } }
+                int cmp=0;
+                if(t->cols[oidx].type==COL_INT){ i64 va=0,vb=0; for(int k=0;k<8;k++) va|=(i64)pa[k]<<(k*8), vb|=(i64)pb[k]<<(k*8); cmp=(va<vb?-1:(va>vb?1:0)); }
+                else { u16 la=*(u16*)pa, lb=*(u16*)pb; usize m=la<lb?la:lb; cmp=rsc_memcmp(pa+2,pb+2,m); if(!cmp) cmp=(la<lb?-1:(la>lb?1:0)); }
+                if(cmp>0){ u8 *tmp=ctx.rows[i]; ctx.rows[i]=ctx.rows[j]; ctx.rows[j]=tmp; u16 tl=ctx.lens[i]; ctx.lens[i]=ctx.lens[j]; ctx.lens[j]=tl; }
+            }
+        }
+    }
+    int lim=s.has_limit? s.limit : ctx.nrows;
+    if(lim>ctx.nrows) lim=ctx.nrows;
+    if(s.is_count){
+        res->ncols=1; rsc_strcpy(res->cols[0],"COUNT");
+        res->nrows=1;
+        char val[32]; int pos=0; int v=ctx.nrows; char rev[16]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
+        rsc_strcpy(res->cells[0][0],val);
+        return 0;
+    }
+    if(s.is_avg){
+        int cidx=-1; for(int c=0;c<t->ncols;c++) if(rsc_strcmp(t->cols[c].name,s.agg_col)==0) cidx=c;
+        if(cidx<0) return -1;
+        i64 sum=0;
+        for(int r=0;r<ctx.nrows;r++){ u8 *p=ctx.rows[r]; for(int k=0;k<cidx;k++){ if(t->cols[k].type==COL_INT) p+=8; else {u16 l=*(u16*)p; p+=2+l; } } i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8); sum+=v; }
+        i64 avg=ctx.nrows? sum/ctx.nrows : 0;
+        res->ncols=1; rsc_strcpy(res->cols[0],"AVG("); rsc_strcpy(res->cols[0]+4,s.agg_col); res->cols[0][4+rsc_strlen(s.agg_col)]=')'; res->cols[0][5+rsc_strlen(s.agg_col)]=0;
+        res->nrows=1;
+        char val[32]; int pos=0; int neg=0; i64 v=avg; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
+        rsc_strcpy(res->cells[0][0],val);
+        return 0;
+    }
+    res->ncols=t->ncols;
+    for(int c=0;c<t->ncols;c++) rsc_strcpy(res->cols[c],t->cols[c].name);
+    res->nrows=lim;
+    for(int r=0;r<lim;r++){
+        u8 *row=ctx.rows[r];
+        u8 *p=row;
+        for(int c=0;c<t->ncols;c++){
+            char *dst=res->cells[r][c];
+            if(t->cols[c].type==COL_INT){
+                i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8);
+                int pos=0; int neg=0; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) dst[pos++]=rev[k]; dst[pos]=0; p+=8;
+            } else { u16 l=*(u16*)p; if(l>63) l=63; rsc_memcpy(dst,p+2,l); dst[l]=0; p+=2+l; }
+        }
+    }
+    return 0;
+}

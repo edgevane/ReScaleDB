@@ -1,0 +1,13 @@
+[package]
+name = "rescaledb"
+version = "0.1.0"
+edition = "2021"
+description = "Safe Rust bindings for ReScaleDB - fast embedded SQL database"
+license = "MIT"
+
+[lib]
+name = "rescaledb"
+path = "src/lib.rs"
+
+[build-dependencies]
+cc = "1.2"
