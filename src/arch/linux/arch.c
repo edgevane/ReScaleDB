@@ -1,5 +1,16 @@
 #include "../arch.h"
 #include "syscall.h"
+#if defined(__aarch64__)
+#define SYS_openat 56
+#define SYS_close 57
+#define SYS_mmap 222
+#define SYS_munmap 215
+#define SYS_msync 227
+#define SYS_ftruncate 46
+#define SYS_lseek 62
+#define SYS_read 63
+#define SYS_write 64
+#else
 #define SYS_openat 257
 #define SYS_close 3
 #define SYS_mmap 9
@@ -9,6 +20,7 @@
 #define SYS_lseek 8
 #define SYS_read 0
 #define SYS_write 1
+#endif
 #define AT_FDCWD -100
 void *arch_mmap(void *addr, usize len, int prot, int flags, int fd, u64 off){
     long ret=arch_syscall6(SYS_mmap,(long)addr,(long)len,(long)prot,(long)flags,(long)fd,(long)off);
