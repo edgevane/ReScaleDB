@@ -2,8 +2,15 @@
 name = "rescaledb"
 version = "0.1.0"
 edition = "2021"
-description = "Safe Rust bindings for ReScaleDB - fast embedded SQL database"
+description = "Safe Rust bindings for ReScaleDB - fast embedded SQL database, in-memory B+Tree with mmap"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/anomalyco/ReScaleDB"
+homepage = "https://github.com/anomalyco/ReScaleDB"
+keywords = ["database", "sql", "embedded", "b-tree", "mmap"]
+categories = ["database", "embedded"]
+authors = ["Aleksander Plominski"]
+exclude = ["/target", "demo.dump"]
 
 [lib]
 name = "rescaledb"
@@ -11,3 +18,6 @@ path = "src/lib.rs"
 
 [build-dependencies]
 cc = "1.2"
+
+[package.metadata.docs.rs]
+all-features = true
