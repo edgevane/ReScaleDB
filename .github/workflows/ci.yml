@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install compilers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build C (x86_64)
+        run: make
+
+      - name: Test C
+        run: ./test_runner
+
+      - name: Build C (aarch64 cross)
+        run: make clean && make ARCH=aarch64
+
+      - name: Build Rust
+        run: make rust
+
+      - name: Test Rust
+        run: make rust-tests
+
+      - name: Build Java (multiarch)
+        run: make java
+
+      - name: Test Java
+        run: make java-tests
+
+      - name: Check pure .so has no JNI
+        run: |
+          make clean && make
+          if nm -D out/x86_64/librsc.so | grep -q Java_; then echo "pure so has JNI!"; exit 1; fi
+          echo "pure so OK"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: out
+          path: |
+            out/
+            bindings/java/build/libs/*.jar
+            bindings/rust/target/

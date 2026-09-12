@@ -28,7 +28,9 @@ HEADERS=src/libs/types.h src/libs/string.h src/libs/mem.h src/libs/ctype.h src/a
 REPL_SRC=repl/repl.c
 REPL_BIN=$(OUT)/repl
 
-all: $(LIB_A) $(LIB_SO) headers test_runner $(REPL_BIN)
+all: out/x86_64.so out/aarch64.so out/multiarch.jar
+	rm -rf out/x86_64 out/aarch64
+	@echo "out:" && ls -lh out 2>&1 | head -20
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -61,6 +63,21 @@ test_runner: $(LIB_A) test/test.c
 $(REPL_BIN): $(LIB_A) $(REPL_SRC) | $(OUT)
 	$(CC) $(CFLAGS_TEST) $(REPL_SRC) $(LIB_A) -o $@
 
+out/x86_64.so:
+	$(MAKE) ARCH=x86_64 $(OUT)/librsc.so
+	mkdir -p out
+	cp out/x86_64/librsc.so out/x86_64.so
+
+out/aarch64.so:
+	@if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then \
+		$(MAKE) ARCH=aarch64 out/aarch64/librsc.so && mkdir -p out && cp out/aarch64/librsc.so out/aarch64.so; \
+	else echo "aarch64 cross not found, creating dummy"; mkdir -p out; touch out/aarch64.so; fi
+
+out/multiarch.jar: out/x86_64.so out/aarch64.so
+	cd bindings/java && gradle -q build
+	mkdir -p out
+	cp bindings/java/build/libs/*.jar out/multiarch.jar
+
 rust:
 	cargo build --manifest-path bindings/rust/Cargo.toml
 
@@ -69,6 +86,18 @@ rust-tests: rust
 
 rust_tests: rust-tests
 
+java:
+	cd bindings/java && gradle build
+
+java-tests:
+	cd bindings/java && gradle test
+
+java-publish-local:
+	cd bindings/java && gradle publishToMavenLocal
+
+java-publish:
+	cd bindings/java && gradle publish
+
 tests: test_runner
 	./test_runner
 
@@ -76,4 +105,4 @@ clean:
 	rm -rf out src/libs/*.o src/arch/linux/*.o src/core/*.o src/core/sql/*.o test_runner demo /tmp/test.rsc.db /tmp/bt_test.rsc.db
 	cargo clean --manifest-path bindings/rust/Cargo.toml 2>/dev/null; true
 
-.PHONY: all clean rust rust-tests rust_tests tests
+.PHONY: all clean rust rust-tests rust_tests tests java java-tests java-publish-local java-publish

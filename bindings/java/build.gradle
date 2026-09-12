@@ -1,0 +1,96 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+group = 'dev.aplominski'
+version = '0.1.0'
+description = 'ReScaleDB Java bindings - fast embedded SQL database'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            from components.java
+            pom {
+                name = 'ReScaleDB'
+                description = project.description
+                url = 'https://github.com/anomalyco/ReScaleDB'
+                licenses {
+                    license {
+                        name = 'MIT License'
+                        url = 'https://opensource.org/licenses/MIT'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'anom'
+                        name = 'Aleksander Plominski'
+                    }
+                }
+                scm {
+                    url = 'https://github.com/anomalyco/ReScaleDB'
+                }
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = "local"
+            url = layout.buildDirectory.dir("staging-deploy")
+        }
+    }
+}
+
+def javaHome = System.getenv("JAVA_HOME") ?: "/usr/lib/jvm/java-26-openjdk"
+
+task buildNative(type: Exec) {
+    commandLine 'sh', '-c', """
+        set -e
+        mkdir -p src/main/resources/native/linux-x86_64
+        mkdir -p src/main/resources/native/linux-aarch64
+        gcc -fPIC -shared -O2 -I../../src -I${javaHome}/include -I${javaHome}/include/linux \\
+            -o src/main/resources/native/linux-x86_64/librsc_jni.so \\
+            ../../src/libs/string.c ../../src/libs/mem.c \\
+            ../../src/arch/linux/arch.c ../../src/core/pager.c \\
+            ../../src/core/btree.c ../../src/core/txn.c ../../src/core/dump.c \\
+            ../../src/core/sql/parser.c ../../src/core/sql/executor.c ../../src/core/sql/db.c \\
+            src/main/c/rescaledb_jni.c
+        if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+            aarch64-linux-gnu-gcc -fPIC -shared -O2 -I../../src -I${javaHome}/include -I${javaHome}/include/linux \\
+                -o src/main/resources/native/linux-aarch64/librsc_jni.so \\
+                ../../src/libs/string.c ../../src/libs/mem.c \\
+                ../../src/arch/linux/arch.c ../../src/core/pager.c \\
+                ../../src/core/btree.c ../../src/core/txn.c ../../src/core/dump.c \\
+                ../../src/core/sql/parser.c ../../src/core/sql/executor.c ../../src/core/sql/db.c \\
+                src/main/c/rescaledb_jni.c && echo "built aarch64" || echo "aarch64 build failed"
+        else
+            echo "aarch64 cross compiler not found, skipping"
+        fi
+        # compat symlink for old load
+        cp -f src/main/resources/native/linux-x86_64/librsc_jni.so src/main/resources/native/librsc_jni.so 2>/dev/null || true
+    """
+}
+
+processResources.dependsOn buildNative

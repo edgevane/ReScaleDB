@@ -1,0 +1,60 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "dev.aplominski",
+    "module": "rescaledb",
+    "version": "0.1.0",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.7.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 17,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api"
+      },
+      "files": [
+        {
+          "name": "rescaledb-0.1.0.jar",
+          "url": "rescaledb-0.1.0.jar",
+          "size": 32537,
+          "sha512": "97699f6ca96b67cc3b152104100a1046d0762b31e167156d889fc057bb68db43f76cd82e01ef781b7b5b261e11b859a141160c4746894eaa1f411de3e0678434",
+          "sha256": "bdbe3a051c4978f2fda17909529c3c79d0854005e1d16cf37a336bf8247cbf10",
+          "sha1": "03ce2193ac6f52330767522dd317e0edb19920ce",
+          "md5": "62046de840752f68f65d2164d27f725b"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 17,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "rescaledb-0.1.0.jar",
+          "url": "rescaledb-0.1.0.jar",
+          "size": 32537,
+          "sha512": "97699f6ca96b67cc3b152104100a1046d0762b31e167156d889fc057bb68db43f76cd82e01ef781b7b5b261e11b859a141160c4746894eaa1f411de3e0678434",
+          "sha256": "bdbe3a051c4978f2fda17909529c3c79d0854005e1d16cf37a336bf8247cbf10",
+          "sha1": "03ce2193ac6f52330767522dd317e0edb19920ce",
+          "md5": "62046de840752f68f65d2164d27f725b"
+        }
+      ]
+    }
+  ]
+}
