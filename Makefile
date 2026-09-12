@@ -29,7 +29,7 @@ HEADERS=src/libs/types.h src/libs/string.h src/libs/mem.h src/libs/ctype.h src/a
 REPL_SRC=repl/repl.c
 REPL_BIN=$(OUT)/repl
 
-all: out/x86_64.so out/aarch64.so out/multiarch.jar
+all: out/x86_64.so out/aarch64.so out/multiarch.jar test_runner
 	rm -rf out/x86_64 out/aarch64
 	@echo "out:" && ls -lh out 2>&1 | head -20
 
