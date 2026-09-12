@@ -17,6 +17,9 @@ typedef struct {
     char order_by[32]; int has_order;
     int limit; int has_limit;
     char idx_name[32]; char idx_col[32];
+    int is_count;
+    int is_avg;
+    char agg_col[32];
     Table *bound_table;
 } Stmt;
 typedef struct { Pager *pager; Table tables[SQL_MAX_TABLES]; int ntables; char pending_path[128]; char pending_target[128]; int has_pending; } Db;

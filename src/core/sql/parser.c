@@ -131,9 +131,27 @@ int sql_parse(const char *sql, Stmt *out){
         return 0;
     } else if(eqi(first,"select")){
         out->kind=STMT_SELECT;
-        // find FROM
         char low[1024]; for(int k=0;buf[k];k++) low[k]=rsc_tolower(buf[k]); low[rsc_strlen(buf)]=0;
         const char *from=0; for(const char *t=low;*t;t++) if(t[0]=='f'&&t[1]=='r'&&t[2]=='o'&&t[3]=='m'){from=t;break;}
+        {
+            int sel_start=(int)(p-buf);
+            int sel_end=from? (int)(from-low) : (int)rsc_strlen(buf);
+            char sel[256]={0}; int si=0;
+            for(int k=sel_start;k<sel_end&&si<255;k++) sel[si++]=buf[k]; sel[si]=0;
+            char *s=sel; while(rsc_isspace(*s)) s++;
+            char sl[256]={0}; for(int k=0;s[k];k++) sl[k]=rsc_tolower(s[k]);
+            char *slp=sl; while(rsc_isspace(*slp)) slp++;
+            if(rsc_strncmp(slp,"count",5)==0){
+                out->is_count=1;
+                char *po=0,*pc=0; for(char *c=slp;*c;c++){ if(*c=='('&&!po) po=c; if(*c==')') pc=c; }
+                if(po&&pc){ int ci=0; for(char *c=po+1;c<pc&&ci<31;c++) if(!rsc_isspace(*c)) out->agg_col[ci++]=rsc_tolower(*c); out->agg_col[ci]=0; }
+                else rsc_strcpy(out->agg_col,"*");
+            } else if(rsc_strncmp(slp,"avg",3)==0){
+                out->is_avg=1;
+                char *po=0,*pc=0; for(char *c=slp;*c;c++){ if(*c=='('&&!po) po=c; if(*c==')') pc=c; }
+                if(po&&pc){ int ci=0; for(char *c=po+1;c<pc&&ci<31;c++) if(!rsc_isspace(*c)) out->agg_col[ci++]=*c; out->agg_col[ci]=0; }
+            }
+        }
         if(from){ int off=from-low; p=buf+off+4; p=skip_sp(p); i=0; while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<31) out->table[i++]=*p++; out->table[i]=0; p=skip_sp(p);
             // WHERE
             char nxt[8]={0}; int ti=0; const char *qq=p; while(*qq&&!rsc_isspace(*qq)&&ti<7) nxt[ti++]=rsc_tolower(*qq++); nxt[ti]=0;

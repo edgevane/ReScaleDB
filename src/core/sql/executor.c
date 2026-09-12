@@ -159,11 +159,47 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
                 }
             }
         }
+        if(s->is_count || s->is_avg){
+            int cnt=ctx.nrows;
+            usize off=0;
+            #define OUTC2(c) do{ if(off+1<cap) out[off++]=c; }while(0)
+            #define OUTS2(s) do{ usize _l=rsc_strlen(s); if(off+_l<cap){ rsc_memcpy(out+off,s,_l); off+=_l; } }while(0)
+            if(s->is_count){
+                char hdr2[64]="COUNT"; char val[32]; int pos=0; int v=cnt; char rev[16]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
+                int w=(int)rsc_strlen(hdr2); int wl=(int)rsc_strlen(val); if(wl>w) w=wl;
+                for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
+                OUTS2(hdr2); OUTC2('\n');
+                for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
+                OUTS2(val); OUTC2('\n');
+                for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
+                if(off<cap) out[off]=0; else out[cap-1]=0; return 0;
+            }
+            if(s->is_avg){
+                int cidx=-1; for(int c=0;c<t->ncols;c++) if(rsc_strcmp(t->cols[c].name,s->agg_col)==0) cidx=c;
+                if(cidx<0) return -1;
+                if(t->cols[cidx].type!=COL_INT) return -1;
+                i64 sum=0;
+                for(int r=0;r<cnt;r++){
+                    u8 *p=ctx.rows[r]; for(int k=0;k<cidx;k++){ if(t->cols[k].type==COL_INT) p+=8; else {u16 l=*(u16*)p; p+=2+l; } }
+                    i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8); sum+=v;
+                }
+                i64 avg=cnt? sum/cnt : 0;
+                char hdr2[64]; rsc_strcpy(hdr2,"AVG("); rsc_strcpy(hdr2+4,s->agg_col); rsc_strcpy(hdr2+4+rsc_strlen(s->agg_col),")");
+                char val[32]; int pos=0; int neg=0; i64 v=avg; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
+                int w=(int)rsc_strlen(hdr2); int wl=(int)rsc_strlen(val); if(wl>w) w=wl;
+                for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
+                OUTS2(hdr2); OUTC2('\n');
+                for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
+                OUTS2(val); OUTC2('\n');
+                for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
+                if(off<cap) out[off]=0; else out[cap-1]=0; return 0;
+            }
+        }
         int lim = s->has_limit? s->limit : ctx.nrows;
         if(lim>ctx.nrows) lim=ctx.nrows;
         int widths[SQL_MAX_COLS]={0};
         for(int c=0;c<t->ncols;c++) widths[c]=(int)rsc_strlen(t->cols[c].name);
-        char cells[256][16][64];
+        static char cells[256][16][64];
         for(int r=0;r<lim;r++){
             u8 *row=ctx.rows[r];
             u8 *p=row;
