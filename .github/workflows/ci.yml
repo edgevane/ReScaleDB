@@ -56,6 +56,15 @@ jobs:
           if nm -D out/x86_64/librsc.so | grep -q Java_; then echo "pure so has JNI!"; exit 1; fi
           echo "pure so OK"
 
+      - name: Publish to Maven Central
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+        run: |
+          cd bindings/java
+          gradle publish --info
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
