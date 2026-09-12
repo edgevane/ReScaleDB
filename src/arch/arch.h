@@ -4,6 +4,7 @@
 #define ARCH_PROT_WRITE 0x2
 #define ARCH_MAP_SHARED  0x01
 #define ARCH_MAP_PRIVATE 0x02
+#define ARCH_MAP_ANON 0x20
 #define ARCH_MS_SYNC  0x4
 #define ARCH_MS_ASYNC 0x1
 void *arch_mmap(void *addr, usize len, int prot, int flags, int fd, u64 off);

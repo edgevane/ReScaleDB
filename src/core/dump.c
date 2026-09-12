@@ -29,6 +29,41 @@ static int copy_file(const char *src, const char *dst){
 }
 int rsc_dump_db(const char *db_path, const char *dump_path){ return copy_file(db_path,dump_path); }
 int rsc_load_db(const char *dump_path, const char *db_path){ return copy_file(dump_path,db_path); }
+int pager_save(Pager *p, const char *path){
+    int fd=arch_open(path,ARCH_O_RDWR|ARCH_O_CREAT|ARCH_O_TRUNC,0644);
+    if(fd<0) return -1;
+    usize left=p->map_len; u8 *ptr=p->map;
+    while(left>0){
+        usize w= left>4096?4096:left;
+        i64 n=arch_write(fd,ptr,w);
+        if(n<=0) break;
+        ptr+=n; left-=n;
+    }
+    arch_close(fd);
+    return 0;
+}
+int pager_load(Pager *p, const char *path){
+    int fd=arch_open(path,ARCH_O_RDONLY,0);
+    if(fd<0) return -1;
+    i64 sz=arch_lseek(fd,0,2); arch_lseek(fd,0,0);
+    if(sz<=0){ arch_close(fd); return -1; }
+    usize need=(usize)sz;
+    if(need>p->map_len){
+        arch_munmap(p->map,p->map_len);
+        void *m=arch_mmap(0,need,ARCH_PROT_READ|ARCH_PROT_WRITE,ARCH_MAP_PRIVATE|ARCH_MAP_ANON,-1,0);
+        if(!m){ arch_close(fd); return -1; }
+        p->map=(u8*)m; p->map_len=need; p->hdr=(RscHeader*)m;
+    }
+    usize off=0;
+    while(off<need){
+        i64 r=arch_read(fd,p->map+off,need-off);
+        if(r<=0) break;
+        off+=r;
+    }
+    p->hdr->page_count=(u32)(need/RSC_PAGE_SIZE);
+    arch_close(fd);
+    return 0;
+}
 int rsc_dump_all(const char *dump_path){
     int out=arch_open(dump_path,ARCH_O_RDWR|ARCH_O_CREAT|ARCH_O_TRUNC,0644);
     if(out<0) return -1;

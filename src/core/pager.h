@@ -20,6 +20,7 @@ typedef struct {
     RscHeader *hdr;
 } Pager;
 int pager_open(Pager *p, const char *path);
+int pager_open_mem(Pager *p, usize pages);
 int pager_close(Pager *p);
 void *pager_get(Pager *p, u64 pageno);
 u64 pager_alloc(Pager *p);

@@ -21,6 +21,7 @@ typedef struct {
 } Stmt;
 typedef struct { Pager *pager; Table tables[SQL_MAX_TABLES]; int ntables; char pending_path[128]; char pending_target[128]; int has_pending; } Db;
 int db_open(Db *db, const char *path);
+int db_init(Db *db);
 int db_close(Db *db);
 int db_exec(Db *db, const char *sql, char *out, usize out_cap);
 int sql_parse(const char *sql, Stmt *out);

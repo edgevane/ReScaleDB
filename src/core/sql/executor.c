@@ -1,5 +1,6 @@
 #include "sql.h"
 #include "../btree.h"
+#include "../dump.h"
 #include "../../libs/string.h"
 #include "../../libs/ctype.h"
 #include "../../arch/arch.h"
@@ -74,54 +75,32 @@ int rsc_dump_all(const char *p);
 int rsc_load_all(const char *p);
 int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
     if(s->kind==STMT_DUMP_ALL){
-        if(db->has_pending){
-            int f1=arch_open(db->pending_path,ARCH_O_RDONLY,0);
-            int f2=arch_open(db->pending_target,ARCH_O_RDWR|ARCH_O_CREAT|ARCH_O_TRUNC,0644);
-            if(f1>=0&&f2>=0){ char b[4096]; i64 r; while((r=arch_read(f1,b,4096))>0) arch_write(f2,b,(usize)r); arch_close(f1); arch_close(f2); }
-            else { if(f1>=0) arch_close(f1); if(f2>=0) arch_close(f2); }
-            pager_sync(db->pager);
-            db->has_pending=0;
-        } else {
-            pager_sync(db->pager);
-        }
-        if(s->table[0]){
-            if(rsc_dump_all(s->table)!=0) return -1;
-        } else {
-            if(rsc_dump_all("state.rsc.dump")!=0) return -1;
-        }
-        if(out&&cap) rsc_strcpy(out,"OK dumped\n"); return 0;
+        const char *path=s->table[0]?s->table:"state.rsc.dump";
+        if(pager_save(db->pager,path)!=0) return -1;
+        if(out&&cap) rsc_strcpy(out,"OK\n"); return 0;
     }
     if(s->kind==STMT_LOAD_ALL){
-        if(rsc_load_all(s->table[0]?s->table:"state.rsc.dump")!=0) return -1;
-        if(out&&cap) rsc_strcpy(out,"OK loaded\n"); return 0;
+        const char *path=s->table[0]?s->table:"state.rsc.dump";
+        if(pager_load(db->pager,path)!=0) return -1;
+        db->ntables=0; rsc_memset(db->tables,0,sizeof(db->tables));
+        extern void db_load_catalog(Db *db);
+        db_load_catalog(db);
+        if(out&&cap) rsc_strcpy(out,"OK\n"); return 0;
     }
     if(s->kind==STMT_CREATE_DB){
-        char target[128]={0}; rsc_strcpy(target,s->table); rsc_strcpy(target+rsc_strlen(target),".rsc.db");
-        char tmp[128]={0}; rsc_strcpy(tmp,"/tmp/"); rsc_strcpy(tmp+5,s->table); rsc_strcpy(tmp+rsc_strlen(tmp),".pending.rsc.db");
         db_close(db);
-        if(pager_open(db->pager,tmp)!=0) return -1;
-        rsc_strcpy(db->pending_path,tmp); rsc_strcpy(db->pending_target,target); db->has_pending=1;
+        if(pager_open_mem(db->pager,4)!=0) return -1;
         db->ntables=0; rsc_memset(db->tables,0,sizeof(db->tables));
+        rsc_memset(db->pending_path,0,sizeof(db->pending_path));
+        rsc_memset(db->pending_target,0,sizeof(db->pending_target));
+        db->has_pending=0;
         if(out&&cap){ rsc_strcpy(out,"OK\n"); } return 0;
     }
     if(s->kind==STMT_DROP_DB){
-        char path[128]={0}; rsc_strcpy(path,s->table); rsc_strcpy(path+rsc_strlen(path),".rsc.db");
-        arch_unlink(path);
         if(out&&cap){ rsc_strcpy(out,"OK\n"); } return 0;
     }
     if(s->kind==STMT_USE){
-        char path[128]={0}; rsc_strcpy(path,s->table); rsc_strcpy(path+rsc_strlen(path),".rsc.db");
-        if(db->has_pending && rsc_strcmp(db->pending_target,path)==0){
-            if(out&&cap){ rsc_strcpy(out,"OK using "); rsc_strcpy(out+rsc_strlen(out),s->table); rsc_strcpy(out+rsc_strlen(out),"\n"); } return 0;
-        }
-        db_close(db);
-        int fd=arch_open(path,ARCH_O_RDONLY,0);
-        if(fd>=0){ arch_close(fd); }
-        else {
-            if(out&&cap){ rsc_strcpy(out,"ERR no such database\n"); } return -1;
-        }
-        if(db_open(db,path)!=0) return -1;
-        if(out&&cap){ rsc_strcpy(out,"OK using "); rsc_strcpy(out+rsc_strlen(out),s->table); rsc_strcpy(out+rsc_strlen(out),"\n"); } return 0;
+        if(out&&cap){ rsc_strcpy(out,"OK\n"); } return 0;
     }
     if(s->kind==STMT_CREATE){
         if(db->ntables>=SQL_MAX_TABLES) return -1;

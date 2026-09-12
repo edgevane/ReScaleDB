@@ -13,7 +13,7 @@ static void db_save_catalog(Db *db){
         *(u64*)p=t->rowid_seq; p+=8;
     }
 }
-static void db_load_catalog(Db *db){
+void db_load_catalog(Db *db){
     u8 *base=(u8*)db->pager->hdr + 64;
     u32 nt=*(u32*)base;
     if(nt>SQL_MAX_TABLES) return;
@@ -35,6 +35,13 @@ int db_open(Db *db, const char *path){
     db->pager=&pager_storage;
     if(pager_open(db->pager,path)!=0) return -1;
     db_load_catalog(db);
+    return 0;
+}
+int db_init(Db *db){
+    rsc_memset(db,0,sizeof(*db));
+    static Pager pager_storage;
+    db->pager=&pager_storage;
+    if(pager_open_mem(db->pager,4)!=0) return -1;
     return 0;
 }
 int db_close(Db *db){ if(db->pager) pager_close(db->pager); return 0; }

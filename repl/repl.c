@@ -23,7 +23,7 @@ static void print_help(){
 int main(){
     Db db;
     char cur_path[128]={0}; rsc_strcpy(cur_path,"/tmp/repl.rsc.db");
-    if(db_open(&db,cur_path)!=0){ put("open fail\n"); return 1; }
+    if(db_init(&db)!=0){ put("open fail\n"); return 1; }
     put("ReScaleDB repl - type .help for help\n");
     char line[1024]; char out[4096];
     while(1){
