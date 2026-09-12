@@ -14,9 +14,10 @@ CFLAGS_TEST=-Wall -Wextra -O2 -Isrc -g
 SRC_LIBS=src/libs/string.c src/libs/mem.c
 SRC_ARCH=src/arch/linux/arch.c
 SRC_CORE=src/core/pager.c src/core/btree.c src/core/txn.c src/core/dump.c src/core/sql/parser.c src/core/sql/executor.c src/core/sql/db.c
-OBJ_LIBS=$(SRC_LIBS:.c=.o)
-OBJ_ARCH=$(SRC_ARCH:.c=.o)
-OBJ_CORE=$(SRC_CORE:.c=.o)
+BUILD_DIR=build/$(ARCH)
+OBJ_LIBS=$(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SRC_LIBS))
+OBJ_ARCH=$(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SRC_ARCH))
+OBJ_CORE=$(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SRC_CORE))
 OBJS=$(OBJ_LIBS) $(OBJ_ARCH) $(OBJ_CORE)
 
 OUT=out/$(ARCH)
@@ -35,21 +36,13 @@ all: out/x86_64.so out/aarch64.so out/multiarch.jar
 $(OUT):
 	mkdir -p $(OUT)
 
+$(BUILD_DIR)/%.o: src/%.c
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS_CORE) -c $< -o $@
+
 headers: | $(OUT)
 	mkdir -p $(OUT)/include
 	cp --parents $(HEADERS) $(OUT)/include/
-
-src/libs/%.o: src/libs/%.c
-	$(CC) $(CFLAGS_CORE) -c $< -o $@
-
-src/arch/linux/%.o: src/arch/linux/%.c
-	$(CC) $(CFLAGS_CORE) -c $< -o $@
-
-src/core/%.o: src/core/%.c
-	$(CC) $(CFLAGS_CORE) -c $< -o $@
-
-src/core/sql/%.o: src/core/sql/%.c
-	$(CC) $(CFLAGS_CORE) -c $< -o $@
 
 $(LIB_A): $(OBJS) | $(OUT)
 	$(AR) rcs $@ $^
@@ -57,20 +50,22 @@ $(LIB_A): $(OBJS) | $(OUT)
 $(LIB_SO): $(OBJS) | $(OUT)
 	$(CC) -shared -o $@ $^
 
-test_runner: $(LIB_A) test/test.c
-	$(CC) $(CFLAGS_TEST) test/test.c $(LIB_A) -o test_runner
+test_runner: $(BUILD_DIR)/libs/string.o $(BUILD_DIR)/libs/mem.o $(BUILD_DIR)/arch/linux/arch.o $(BUILD_DIR)/core/pager.o $(BUILD_DIR)/core/btree.o $(BUILD_DIR)/core/txn.o $(BUILD_DIR)/core/dump.o $(BUILD_DIR)/core/sql/parser.o $(BUILD_DIR)/core/sql/executor.o $(BUILD_DIR)/core/sql/db.o
+	mkdir -p $(BUILD_DIR)
+	$(AR) rcs $(BUILD_DIR)/librsc.a $^
+	$(CC) $(CFLAGS_TEST) test/test.c $(BUILD_DIR)/librsc.a -o test_runner
 
-$(REPL_BIN): $(LIB_A) $(REPL_SRC) | $(OUT)
-	$(CC) $(CFLAGS_TEST) $(REPL_SRC) $(LIB_A) -o $@
+$(REPL_BIN): $(OBJS) | $(OUT)
+	$(CC) $(CFLAGS_TEST) $(REPL_SRC) $(OBJS) -o $@
 
 out/x86_64.so:
-	$(MAKE) ARCH=x86_64 $(OUT)/librsc.so
+	$(MAKE) ARCH=x86_64 BUILD_DIR=build/x86_64 OUT=out/x86_64 $(OUT)/librsc.so
 	mkdir -p out
 	cp out/x86_64/librsc.so out/x86_64.so
 
 out/aarch64.so:
 	@if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then \
-		$(MAKE) ARCH=aarch64 out/aarch64/librsc.so && mkdir -p out && cp out/aarch64/librsc.so out/aarch64.so; \
+		$(MAKE) ARCH=aarch64 BUILD_DIR=build/aarch64 OUT=out/aarch64 out/aarch64/librsc.so && mkdir -p out && cp out/aarch64/librsc.so out/aarch64.so; \
 	else echo "aarch64 cross not found, creating dummy"; mkdir -p out; touch out/aarch64.so; fi
 
 out/multiarch.jar: out/x86_64.so out/aarch64.so
@@ -102,7 +97,7 @@ tests: test_runner
 	./test_runner
 
 clean:
-	rm -rf out src/libs/*.o src/arch/linux/*.o src/core/*.o src/core/sql/*.o test_runner demo /tmp/test.rsc.db /tmp/bt_test.rsc.db
+	rm -rf out build src/libs/*.o src/arch/linux/*.o src/core/*.o src/core/sql/*.o test_runner demo /tmp/test.rsc.db /tmp/bt_test.rsc.db
 	cargo clean --manifest-path bindings/rust/Cargo.toml 2>/dev/null; true
 
 .PHONY: all clean rust rust-tests rust_tests tests java java-tests java-publish-local java-publish

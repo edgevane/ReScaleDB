@@ -2,3 +2,5 @@ test_runner
 out/
 *.o
 bindings/rust/target
+bindings/java/build
+bindings/java/.gradle
