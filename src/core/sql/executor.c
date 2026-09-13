@@ -41,11 +41,61 @@ static long parse_int_val(const char *p){
     if(neg) v=-v;
     return v;
 }
-static int pk_value_exists(Db *db, Table *t, const char *val_str){
-    if(t->pk_col<0) return 0;
-    int pk=t->pk_col;
+static int row_is_null(Table *t, u8 *row, int col){
+    if(t->has_nullmap){
+        u16 map=*(u16*)row;
+        return (map>>col)&1;
+    }
+    return 0;
+}
+static u8 *row_col_ptr(Table *t, u8 *row, int col){
+    u8 *p=row + (t->has_nullmap?2:0);
+    for(int k=0;k<col;k++){
+        if(t->has_nullmap && ((*(u16*)row>>k)&1)) continue;
+        if(t->cols[k].type==COL_INT) p+=8;
+        else { u16 l=*(u16*)p; p+=2+l; }
+    }
+    return p;
+}
+static void row_cell_str(Table *t, u8 *row, int col, char *dst, int *isnull){
+    if(row_is_null(t,row,col)){ if(isnull) *isnull=1; dst[0]=0; return; }
+    if(isnull) *isnull=0;
+    u8 *p=row_col_ptr(t,row,col);
+    if(t->cols[col].type==COL_INT){
+        i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8);
+        int pos=0; int neg=0; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0;
+        if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-';
+        for(int k=rp-1;k>=0;k--) dst[pos++]=rev[k]; dst[pos]=0;
+    } else {
+        u16 l=*(u16*)p; if(l>63) l=63;
+        rsc_memcpy(dst,p+2,l); dst[l]=0;
+    }
+}
+static void decode_row_all(Table *t, u8 *row, char out[16][64], int isnull[16]){
+    for(int c=0;c<t->ncols;c++) row_cell_str(t,row,c,out[c],isnull? &isnull[c] : 0);
+}
+static int encode_row_new(Table *t, char vals[16][64], int is_null[16], u8 *out, int *out_len){
+    int off=0;
+    u16 map=0;
+    for(int c=0;c<t->ncols;c++) if(is_null[c]) map|=(u16)(1u<<c);
+    out[off++]=(u8)(map&0xFF); out[off++]=(u8)((map>>8)&0xFF);
+    for(int i=0;i<t->ncols;i++){
+        if(is_null[i]) continue;
+        if(t->cols[i].type==COL_INT){
+            long v=parse_int_val(vals[i]);
+            for(int k=0;k<8;k++) out[off++]=(u8)((v>>(k*8))&0xFF);
+        } else {
+            usize l=rsc_strlen(vals[i]); if(l>255) l=255;
+            *(u16*)(out+off)=(u16)l; off+=2;
+            rsc_memcpy(out+off,vals[i],l); off+=l;
+        }
+    }
+    *out_len=off;
+    return 0;
+}
+static int col_value_exists(Db *db, Table *t, int col, const char *val_str){
     long want_int=0;
-    if(t->cols[pk].type==COL_INT) want_int=parse_int_val(val_str);
+    if(t->cols[col].type==COL_INT) want_int=parse_int_val(val_str);
     u64 pn=t->root;
     while(pn){
         BNode *n=(BNode*)pager_get(db->pager,pn);
@@ -61,9 +111,9 @@ static int pk_value_exists(Db *db, Table *t, const char *val_str){
             u8 *e=(u8*)n+n->offs[i];
             u16 kl=*(u16*)e;
             u8 *row=e+4+kl;
-            u8 *p=row;
-            for(int k=0;k<pk;k++){ if(t->cols[k].type==COL_INT) p+=8; else { u16 l=*(u16*)p; p+=2+l; } }
-            if(t->cols[pk].type==COL_INT){
+            if(row_is_null(t,row,col)) continue;
+            u8 *p=row_col_ptr(t,row,col);
+            if(t->cols[col].type==COL_INT){
                 i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8);
                 if(v==(i64)want_int) return 1;
             } else {
@@ -76,22 +126,55 @@ static int pk_value_exists(Db *db, Table *t, const char *val_str){
     }
     return 0;
 }
+static int pk_value_exists(Db *db, Table *t, const char *val_str){
+    if(t->pk_col<0) return 0;
+    return col_value_exists(db,t,t->pk_col,val_str);
+}
+static void set_unique_error(char *out, usize cap, const char *col, const char *val){
+    if(!out||!cap) return;
+    rsc_memset(out,0,cap);
+    rsc_strncpy(out,"ERR duplicate value '",cap-1);
+    usize l=rsc_strlen(out);
+    if(l+64<cap){ rsc_strcpy(out+l,val); l+=rsc_strlen(val); }
+    if(l+16<cap) rsc_strcpy(out+l,"' for UNIQUE '");
+    l=rsc_strlen(out);
+    if(l+32<cap){ rsc_strcpy(out+l,col); l+=rsc_strlen(col); }
+    if(l+3<cap) rsc_strcpy(out+l,"'\n");
+    out[cap-1]=0;
+}
+static void set_notnull_error(char *out, usize cap, const char *col){
+    if(!out||!cap) return;
+    rsc_memset(out,0,cap);
+    rsc_strncpy(out,"ERR column '",cap-1);
+    usize l=rsc_strlen(out);
+    if(l+32<cap){ rsc_strcpy(out+l,col); l+=rsc_strlen(col); }
+    if(l+20<cap) rsc_strcpy(out+l,"' cannot be null\n");
+    out[cap-1]=0;
+}
+static void set_default_error(char *out, usize cap, const char *col){
+    if(!out||!cap) return;
+    rsc_memset(out,0,cap);
+    rsc_strncpy(out,"ERR no default value for column '",cap-1);
+    usize l=rsc_strlen(out);
+    if(l+32<cap){ rsc_strcpy(out+l,col); l+=rsc_strlen(col); }
+    if(l+3<cap) rsc_strcpy(out+l,"'\n");
+    out[cap-1]=0;
+}
 static u64 enc_key_rowid(u64 id, u8 *out){ for(int i=7;i>=0;i--) out[i]=id&0xFF, id>>=8; return 8; }
 static int eval_where(Table *t, u8 *row, WhereClause *w){
-    // row format: for each col i: if INT 8 bytes, if TEXT u16 len + bytes
-    // need to find col idx
     int cidx=-1; for(int i=0;i<t->ncols;i++) if(rsc_strcmp(t->cols[i].name,w->col)==0) cidx=i;
     if(cidx<0) return 0;
-    // decode row up to cidx
-    u8 *p=row;
-    for(int i=0;i<cidx;i++){ if(t->cols[i].type==COL_INT) p+=8; else { u16 l=*(u16*)p; p+=2+l; } }
+    int cell_null=row_is_null(t,row,cidx);
+    if(w->is_null_check==1) return cell_null;
+    if(w->is_null_check==2) return !cell_null;
+    if(cell_null) return 0;
+    if(w->val_is_null){
+        if(rsc_strcmp(w->op,"=")==0) return cell_null;
+        if(rsc_strcmp(w->op,"!=")==0) return !cell_null;
+        return 0;
+    }
     char cell[64]={0};
-    if(t->cols[cidx].type==COL_INT){ i64 v=0; for(int k=0;k<8;k++) v=(v<<8)|p[k]; // big endian? we stored BE? actually store BE for key but row we store LE? use LE
-        // row store LE for now
-        v=0; for(int k=7;k>=0;k--) v=(v<<8)|p[k];
-        // simple
-        char tmp[32]; int neg=0; if(v<0){neg=1; v=-v;} int pos=0; char rev[32]; if(v==0) rev[pos++]='0'; while(v>0){rev[pos++]='0'+(v%10); v/=10;} if(neg) rev[pos++]='-'; for(int k=0;k<pos;k++) cell[k]=rev[pos-1-k]; cell[pos]=0;
-    } else { u16 l=*(u16*)p; if(l>63) l=63; rsc_memcpy(cell,p+2,l); cell[l]=0; }
+    row_cell_str(t,row,cidx,cell,0);
     // compare cell vs w->val
     int cmp;
     if(t->cols[cidx].type==COL_INT){
@@ -103,6 +186,7 @@ static int eval_where(Table *t, u8 *row, WhereClause *w){
         if(a<b) cmp=-1; else if(a>b) cmp=1; else cmp=0;
     } else cmp=rsc_strcmp(cell,w->val);
     if(rsc_strcmp(w->op,"=")==0) return cmp==0;
+    if(rsc_strcmp(w->op,"!=")==0) return cmp!=0;
     if(rsc_strcmp(w->op,"<")==0) return cmp<0;
     if(rsc_strcmp(w->op,">")==0) return cmp>0;
     if(rsc_strcmp(w->op,"<=")==0) return cmp<=0;
@@ -183,6 +267,7 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         rsc_strcpy(t->name,s->table);
         t->ncols=s->ncols; for(int i=0;i<s->ncols;i++) t->cols[i]=s->cols[i];
         t->pk_col=pk_idx;
+        t->has_nullmap=1;
         t->rowid_seq=1;
         u64 root=0; btree_create(db->pager,&root); t->root=root;
         // persist catalog into pager hdr root as simple? also store in catalog btree if exists
@@ -200,28 +285,64 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         if(idx<0){ rsc_debug_unknown_table(db,s,s->table); set_table_error(out,cap,s->table); return -1; }
         Table *t=&db->tables[idx];
         if(s->nvals != t->ncols){ if(out&&cap) rsc_strcpy(out,"ERR column count\n"); return -1; }
-        if(t->pk_col>=0){
-            const char *pkval=s->vals[t->pk_col];
-            if(!pkval[0]){ if(out&&cap) rsc_strcpy(out,"ERR primary key required\n"); return -1; }
-            if(pk_value_exists(db,t,pkval)){
-                extern void rsc_debug_duplicate_pk(Db *db, Stmt *s, const char *val);
-                rsc_debug_duplicate_pk(db,s,pkval);
-                set_pk_error(out,cap,pkval);
-                return -1;
+        char fvals[16][64]; int fis_null[16]={0};
+        extern void rsc_debug_constraint(Db *db, Stmt *s, const char *col, const char *errmsg);
+        for(int i=0;i<t->ncols;i++){
+            int is_null=0;
+            char tmp[64]={0};
+            if(s->vals_is_default[i]){
+                if(t->cols[i].has_default){
+                    if(t->cols[i].default_is_null) is_null=1;
+                    else rsc_strcpy(tmp,t->cols[i].default_val);
+                } else { set_default_error(out,cap,t->cols[i].name); rsc_debug_constraint(db,s,t->cols[i].name,out); return -1; }
+            } else if(s->vals_is_null[i]){
+                is_null=1;
+            } else {
+                rsc_strcpy(tmp,s->vals[i]);
+            }
+            if(is_null){
+                if(t->cols[i].is_not_null || t->cols[i].is_pk){
+                    set_notnull_error(out,cap,t->cols[i].name);
+                    rsc_debug_constraint(db,s,t->cols[i].name,out);
+                    return -1;
+                }
+                fis_null[i]=1; fvals[i][0]=0;
+            } else {
+                fis_null[i]=0; rsc_strcpy(fvals[i],tmp);
+            }
+        }
+        for(int i=0;i<t->ncols;i++){
+            if(fis_null[i]) continue;
+            if(t->cols[i].is_pk){
+                if(pk_value_exists(db,t,fvals[i])){
+                    extern void rsc_debug_duplicate_pk(Db *db, Stmt *s, const char *val);
+                    rsc_debug_duplicate_pk(db,s,fvals[i]);
+                    set_pk_error(out,cap,fvals[i]);
+                    return -1;
+                }
+            } else if(t->cols[i].is_unique){
+                if(col_value_exists(db,t,i,fvals[i])){
+                    rsc_debug_constraint(db,s,t->cols[i].name,"duplicate UNIQUE value");
+                    set_unique_error(out,cap,t->cols[i].name,fvals[i]);
+                    return -1;
+                }
             }
         }
         u8 row[1024]; int off=0;
-        for(int i=0;i<t->ncols;i++){
-            if(t->cols[i].type==COL_INT){
-                long v=0; int neg=0; const char *p=s->vals[i]; if(*p=='-'){neg=1;p++;} while(*p&&rsc_isdigit(*p)) v=v*10+(*p++-'0'); if(neg) v=-v;
-                for(int k=0;k<8;k++) row[off++]= (v>>(k*8))&0xFF;
-            } else {
-                usize l=rsc_strlen(s->vals[i]); if(l>255) l=255; *(u16*)(row+off)=(u16)l; off+=2; rsc_memcpy(row+off,s->vals[i],l); off+=l;
+        if(t->has_nullmap){
+            encode_row_new(t,fvals,fis_null,row,&off);
+        } else {
+            for(int i=0;i<t->ncols;i++){
+                if(t->cols[i].type==COL_INT){
+                    long v=parse_int_val(fvals[i]);
+                    for(int k=0;k<8;k++) row[off++]= (u8)((v>>(k*8))&0xFF);
+                } else {
+                    usize l=rsc_strlen(fvals[i]); if(l>255) l=255; *(u16*)(row+off)=(u16)l; off+=2; rsc_memcpy(row+off,fvals[i],l); off+=l;
+                }
             }
         }
         u8 key[8]; enc_key_rowid(t->rowid_seq++,key);
         btree_insert(db->pager,&t->root,key,8,row,off);
-        // update pager hdr root if catalog usage - for now keep
         if(out&&cap){ rsc_memcpy(out,"OK\n",3); out[3]=0; }
         return 0;
     }
@@ -252,17 +373,29 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         else if(!s->is_count && !s->is_avg){ for(int i=0;i<s->nselect;i++) proj_idx[proj_n++]=find_col(t,s->select_cols[i]); }
         ScanCtx ctx; rsc_memset(&ctx,0,sizeof(ctx)); ctx.db=db; ctx.t=t; ctx.st=s; ctx.out=out; ctx.cap=cap; ctx.off=0;
         btree_scan(db->pager,t->root,scan_cb,&ctx);
-        // simple order by (bubble)
+        // simple order by (bubble, NULLs last)
         if(s->has_order){
             int oidx=-1; for(int i=0;i<t->ncols;i++) if(rsc_strcmp(t->cols[i].name,s->order_by)==0) oidx=i;
             if(oidx>=0){
                 for(int i=0;i<ctx.nrows;i++) for(int j=i+1;j<ctx.nrows;j++){
-                    // decode both rows col
-                    u8 *pa=ctx.rows[i],*pb=ctx.rows[j];
-                    for(int k=0;k<oidx;k++){ if(t->cols[k].type==COL_INT) pa+=8,pb+=8; else {u16 la=*(u16*)pa,lb=*(u16*)pb; pa+=2+la; pb+=2+lb; } }
+                    int na=row_is_null(t,ctx.rows[i],oidx);
+                    int nb=row_is_null(t,ctx.rows[j],oidx);
                     int cmp=0;
-                    if(t->cols[oidx].type==COL_INT){ i64 va=0,vb=0; for(int k=0;k<8;k++) va|=(i64)pa[k]<<(k*8), vb|=(i64)pb[k]<<(k*8); cmp=(va<vb?-1:(va>vb?1:0)); }
-                    else { u16 la=*(u16*)pa, lb=*(u16*)pb; usize m=la<lb?la:lb; cmp=rsc_memcmp(pa+2,pb+2,m); if(!cmp) cmp=(la<lb?-1:(la>lb?1:0)); }
+                    if(na && nb) cmp=0;
+                    else if(na) cmp=1;
+                    else if(nb) cmp=-1;
+                    else {
+                        char ca[64]={0}, cb[64]={0};
+                        row_cell_str(t,ctx.rows[i],oidx,ca,0);
+                        row_cell_str(t,ctx.rows[j],oidx,cb,0);
+                        if(t->cols[oidx].type==COL_INT){
+                            long va=parse_int_val(ca), vb=parse_int_val(cb);
+                            cmp=(va<vb?-1:(va>vb?1:0));
+                        } else {
+                            cmp=rsc_strcmp(ca,cb);
+                            if(cmp<0) cmp=-1; else if(cmp>0) cmp=1;
+                        }
+                    }
                     if(cmp>0){ u8 *tmp=ctx.rows[i]; ctx.rows[i]=ctx.rows[j]; ctx.rows[j]=tmp; u16 tl=ctx.lens[i]; ctx.lens[i]=ctx.lens[j]; ctx.lens[j]=tl; }
                 }
             }
@@ -273,7 +406,13 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
             #define OUTC2(c) do{ if(off+1<cap) out[off++]=c; }while(0)
             #define OUTS2(s) do{ usize _l=rsc_strlen(s); if(off+_l<cap){ rsc_memcpy(out+off,s,_l); off+=_l; } }while(0)
             if(s->is_count){
-                char hdr2[64]="COUNT"; char val[32]; int pos=0; int v=cnt; char rev[16]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
+                int v=cnt;
+                if(s->agg_col[0] && rsc_strcmp(s->agg_col,"*")!=0){
+                    int cc=find_col(t,s->agg_col);
+                    v=0;
+                    for(int r=0;r<cnt;r++) if(!row_is_null(t,ctx.rows[r],cc)) v++;
+                }
+                char hdr2[64]="COUNT"; char val[32]; int pos=0; char rev[16]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
                 int w=(int)rsc_strlen(hdr2); int wl=(int)rsc_strlen(val); if(wl>w) w=wl;
                 for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
                 OUTS2(hdr2); OUTC2('\n');
@@ -286,14 +425,19 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
                 int cidx=-1; for(int c=0;c<t->ncols;c++) if(rsc_strcmp(t->cols[c].name,s->agg_col)==0) cidx=c;
                 if(cidx<0) return -1;
                 if(t->cols[cidx].type!=COL_INT) return -1;
-                i64 sum=0;
+                i64 sum=0; int n=0;
                 for(int r=0;r<cnt;r++){
-                    u8 *p=ctx.rows[r]; for(int k=0;k<cidx;k++){ if(t->cols[k].type==COL_INT) p+=8; else {u16 l=*(u16*)p; p+=2+l; } }
-                    i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8); sum+=v;
+                    if(row_is_null(t,ctx.rows[r],cidx)) continue;
+                    char cb[64]={0}; row_cell_str(t,ctx.rows[r],cidx,cb,0);
+                    sum+=parse_int_val(cb); n++;
                 }
-                i64 avg=cnt? sum/cnt : 0;
                 char hdr2[64]; rsc_strcpy(hdr2,"AVG("); rsc_strcpy(hdr2+4,s->agg_col); rsc_strcpy(hdr2+4+rsc_strlen(s->agg_col),")");
-                char val[32]; int pos=0; int neg=0; i64 v=avg; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
+                char val[32];
+                if(n==0){ rsc_strcpy(val,"NULL"); }
+                else {
+                    i64 avg=sum/n;
+                    int pos=0; int neg=0; i64 v=avg; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
+                }
                 int w=(int)rsc_strlen(hdr2); int wl=(int)rsc_strlen(val); if(wl>w) w=wl;
                 for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
                 OUTS2(hdr2); OUTC2('\n');
@@ -310,20 +454,12 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         static char cells[256][16][64];
         for(int r=0;r<lim;r++){
             u8 *row=ctx.rows[r];
-            char tmpvals[16][64];
-            {
-                u8 *p=row;
-                for(int c=0;c<t->ncols;c++){
-                    char *dst=tmpvals[c];
-                    if(t->cols[c].type==COL_INT){
-                        i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8);
-                        int pos=0; int neg=0; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) dst[pos++]=rev[k]; dst[pos]=0; p+=8;
-                    } else { u16 l=*(u16*)p; if(l>63) l=63; rsc_memcpy(dst,p+2,l); dst[l]=0; p+=2+l; }
-                }
-            }
+            char tmpvals[16][64]; int tmpnull[16]={0};
+            decode_row_all(t,row,tmpvals,tmpnull);
             for(int pi=0;pi<proj_n;pi++){
                 int c=proj_idx[pi];
-                rsc_strcpy(cells[r][pi], tmpvals[c]);
+                if(tmpnull[c]) rsc_strcpy(cells[r][pi], "NULL");
+                else rsc_strcpy(cells[r][pi], tmpvals[c]);
                 int cl=(int)rsc_strlen(cells[r][pi]);
                 if(cl>widths[pi]) widths[pi]=cl;
             }
@@ -357,8 +493,10 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         return 0;
     }
     if(s->kind==STMT_DELETE){
-        int idx=find_table(db,s->table); if(idx<0) return -1;
+        int idx=find_table(db,s->table);
+        if(idx<0){ rsc_debug_unknown_table(db,s,s->table); set_table_error(out,cap,s->table); return -1; }
         Table *t=&db->tables[idx];
+        for(int i=0;i<s->nwhere;i++) if(find_col(t,s->where[i].col)<0){ rsc_debug_unknown_column(db,s,s->where[i].col,"where"); set_col_error(out,cap,s->where[i].col); return -1; }
         // scan and delete matching rowids
         // collect keys to delete
         u8 keys[256][8]; int nk=0;
@@ -386,73 +524,89 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         int colidx=-1; for(int i=0;i<t->ncols;i++) if(rsc_strcmp(t->cols[i].name,s->cols[0].name)==0) colidx=i;
         if(colidx<0){ rsc_debug_unknown_column(db,s,s->cols[0].name,"update"); set_col_error(out,cap,s->cols[0].name); return -1; }
         for(int i=0;i<s->nwhere;i++) if(find_col(t,s->where[i].col)<0){ rsc_debug_unknown_column(db,s,s->where[i].col,"where"); set_col_error(out,cap,s->where[i].col); return -1; }
-        if(colidx==t->pk_col){
-            const char *newval=s->vals[0];
-            // if more than one row would get same PK -> duplicate
-            // check if new value exists outside matched rows later; quick check: if exists at all and matched rows don't already all have it, fail
-            // full check done after scan; here pre-check for multi-row update
-            (void)newval;
+        extern void rsc_debug_constraint(Db *db, Stmt *s, const char *col, const char *errmsg);
+        int new_is_null=0; char new_val[64]={0};
+        if(s->vals_is_default[0]){
+            if(t->cols[colidx].has_default){
+                if(t->cols[colidx].default_is_null) new_is_null=1;
+                else rsc_strcpy(new_val,t->cols[colidx].default_val);
+            } else { set_default_error(out,cap,t->cols[colidx].name); rsc_debug_constraint(db,s,t->cols[colidx].name,out); return -1; }
+        } else if(s->vals_is_null[0]){
+            new_is_null=1;
+        } else {
+            rsc_strcpy(new_val,s->vals[0]);
+        }
+        if(new_is_null && (t->cols[colidx].is_not_null || t->cols[colidx].is_pk)){
+            set_notnull_error(out,cap,t->cols[colidx].name);
+            rsc_debug_constraint(db,s,t->cols[colidx].name,out);
+            return -1;
         }
         // similar scan
         u8 keys[256][8]; u8 rows[256][1024]; u16 rls[256]; int nk=0;
         u64 pn=t->root;
         while(pn){ BNode *n=(BNode*)pager_get(db->pager,pn); if(!n||n->is_leaf) break; if(n->nkeys==0) break; u8 *e=(u8*)n+n->offs[0]; u16 ek=*(u16*)e; pn=*(u64*)(e+2+ek); }
         while(pn&&nk<256){ BNode *n=(BNode*)pager_get(db->pager,pn); if(!n) break; for(int i=0;i<n->nkeys;i++){ u8 *e=(u8*)n+n->offs[i]; u16 kl=*(u16*)e; u16 vl=*(u16*)(e+2); u8 *k=e+4; u8 *v=e+4+kl; int ok=1; for(int w=0;w<s->nwhere;w++) if(!eval_where(t,v,&s->where[w])){ok=0;break;} if(ok){ rsc_memcpy(keys[nk],k,kl); rsc_memcpy(rows[nk],v,vl); rls[nk]=vl; nk++; } } pn=n->next_leaf; }
-        if(colidx==t->pk_col && nk>0){
-            const char *newval=s->vals[0];
+        if(!new_is_null && (colidx==t->pk_col || t->cols[colidx].is_unique) && nk>0){
             if(nk>1){
-                extern void rsc_debug_duplicate_pk(Db *db, Stmt *s, const char *val);
-                rsc_debug_duplicate_pk(db,s,newval);
-                set_pk_error(out,cap,newval);
+                if(colidx==t->pk_col){
+                    extern void rsc_debug_duplicate_pk(Db *db, Stmt *s, const char *val);
+                    rsc_debug_duplicate_pk(db,s,new_val);
+                    set_pk_error(out,cap,new_val);
+                } else {
+                    rsc_debug_constraint(db,s,t->cols[colidx].name,"duplicate UNIQUE value");
+                    set_unique_error(out,cap,t->cols[colidx].name,new_val);
+                }
                 return -1;
             }
             // nk==1: check if new value differs from current and already exists elsewhere
             {
-                u8 *cur=rows[0];
-                u8 *cp=cur;
-                for(int k=0;k<colidx;k++){ if(t->cols[k].type==COL_INT) cp+=8; else { u16 l=*(u16*)cp; cp+=2+l; } }
+                int cur_null=row_is_null(t,rows[0],colidx);
                 int same=0;
-                if(t->cols[colidx].type==COL_INT){
-                    long nv=parse_int_val(newval);
-                    i64 cv=0; for(int k=0;k<8;k++) cv|=(i64)cp[k]<<(k*8);
-                    same=(cv==(i64)nv);
+                if(cur_null){
+                    same=0;
                 } else {
-                    u16 l=*(u16*)cp; usize vl=rsc_strlen(newval);
-                    same=(l==vl && rsc_memcmp(cp+2,newval,l)==0);
+                    char curval[64]={0}; row_cell_str(t,rows[0],colidx,curval,0);
+                    if(t->cols[colidx].type==COL_INT) same=(parse_int_val(curval)==parse_int_val(new_val));
+                    else same=(rsc_strcmp(curval,new_val)==0);
                 }
-                if(!same && pk_value_exists(db,t,newval)){
-                    extern void rsc_debug_duplicate_pk(Db *db, Stmt *s, const char *val);
-                    rsc_debug_duplicate_pk(db,s,newval);
-                    set_pk_error(out,cap,newval);
+                if(!same && col_value_exists(db,t,colidx,new_val)){
+                    // make sure the existing row isn't the one being updated (same value already handled)
+                    // col_value_exists finds any row incl. current; since current differs, it's a real dup
+                    if(colidx==t->pk_col){
+                        extern void rsc_debug_duplicate_pk(Db *db, Stmt *s, const char *val);
+                        rsc_debug_duplicate_pk(db,s,new_val);
+                        set_pk_error(out,cap,new_val);
+                    } else {
+                        rsc_debug_constraint(db,s,t->cols[colidx].name,"duplicate UNIQUE value");
+                        set_unique_error(out,cap,t->cols[colidx].name,new_val);
+                    }
                     return -1;
                 }
             }
         }
         for(int i=0;i<nk;i++){
-            // decode row, patch col
-            u8 newrow[1024]; rsc_memcpy(newrow,rows[i],rls[i]);
-            u8 *p=newrow; for(int k=0;k<colidx;k++){ if(t->cols[k].type==COL_INT) p+=8; else {u16 l=*(u16*)p; p+=2+l;} }
-            if(t->cols[colidx].type==COL_INT){
-                long v=0; int neg=0; const char *pp=s->vals[0]; if(*pp=='-'){neg=1;pp++;} while(*pp&&rsc_isdigit(*pp)) v=v*10+(*pp++-'0'); if(neg) v=-v;
-                for(int k=0;k<8;k++) p[k]=(v>>(k*8))&0xFF;
+            char dec[16][64]; int decnull[16]={0};
+            decode_row_all(t,rows[i],dec,decnull);
+            if(new_is_null){ decnull[colidx]=1; dec[colidx][0]=0; }
+            else { decnull[colidx]=0; rsc_strcpy(dec[colidx],new_val); }
+            u8 newrow[1024]; int nlen=0;
+            if(t->has_nullmap){
+                encode_row_new(t,dec,decnull,newrow,&nlen);
             } else {
-                usize nl=rsc_strlen(s->vals[0]);
-                u8 rebuilt[1024]; int roff=0;
-                u8 *op=rows[i];
+                // legacy table: cannot store null (no NOT NULL possible on legacy)
+                nlen=0;
                 for(int c=0;c<t->ncols;c++){
-                    if(c==colidx){
-                        *(u16*)(rebuilt+roff)=(u16)nl; roff+=2; rsc_memcpy(rebuilt+roff,s->vals[0],nl); roff+=nl;
-                        if(t->cols[c].type==COL_INT) op+=8; else {u16 l=*(u16*)op; op+=2+l;}
+                    if(t->cols[c].type==COL_INT){
+                        long v=parse_int_val(dec[c]);
+                        for(int k=0;k<8;k++) newrow[nlen++]=(u8)((v>>(k*8))&0xFF);
                     } else {
-                        if(t->cols[c].type==COL_INT){ rsc_memcpy(rebuilt+roff,op,8); roff+=8; op+=8; }
-                        else {u16 l=*(u16*)op; *(u16*)(rebuilt+roff)=l; roff+=2; rsc_memcpy(rebuilt+roff,op+2,l); roff+=l; op+=2+l;}
+                        usize l=rsc_strlen(dec[c]); if(l>255) l=255;
+                        *(u16*)(newrow+nlen)=(u16)l; nlen+=2;
+                        rsc_memcpy(newrow+nlen,dec[c],l); nlen+=l;
                     }
                 }
-                rsc_memcpy(newrow,rebuilt,roff);
-                btree_insert(db->pager,&t->root,keys[i],8,newrow,roff);
-                continue;
             }
-            btree_insert(db->pager,&t->root,keys[i],8,newrow,rls[i]);
+            btree_insert(db->pager,&t->root,keys[i],8,newrow,nlen);
         }
         if(out&&cap){ rsc_memcpy(out,"OK\n",3); out[3]=0; }
         return 0;
@@ -479,11 +633,24 @@ int db_query(Db *db, const char *sql, RscResult *res){
         int oidx=-1; for(int i=0;i<t->ncols;i++) if(rsc_strcmp(t->cols[i].name,s.order_by)==0) oidx=i;
         if(oidx>=0){
             for(int i=0;i<ctx.nrows;i++) for(int j=i+1;j<ctx.nrows;j++){
-                u8 *pa=ctx.rows[i],*pb=ctx.rows[j];
-                for(int k=0;k<oidx;k++){ if(t->cols[k].type==COL_INT) pa+=8,pb+=8; else {u16 la=*(u16*)pa,lb=*(u16*)pb; pa+=2+la; pb+=2+lb; } }
+                int na=row_is_null(t,ctx.rows[i],oidx);
+                int nb=row_is_null(t,ctx.rows[j],oidx);
                 int cmp=0;
-                if(t->cols[oidx].type==COL_INT){ i64 va=0,vb=0; for(int k=0;k<8;k++) va|=(i64)pa[k]<<(k*8), vb|=(i64)pb[k]<<(k*8); cmp=(va<vb?-1:(va>vb?1:0)); }
-                else { u16 la=*(u16*)pa, lb=*(u16*)pb; usize m=la<lb?la:lb; cmp=rsc_memcmp(pa+2,pb+2,m); if(!cmp) cmp=(la<lb?-1:(la>lb?1:0)); }
+                if(na && nb) cmp=0;
+                else if(na) cmp=1;
+                else if(nb) cmp=-1;
+                else {
+                    char ca[64]={0}, cb[64]={0};
+                    row_cell_str(t,ctx.rows[i],oidx,ca,0);
+                    row_cell_str(t,ctx.rows[j],oidx,cb,0);
+                    if(t->cols[oidx].type==COL_INT){
+                        long va=parse_int_val(ca), vb=parse_int_val(cb);
+                        cmp=(va<vb?-1:(va>vb?1:0));
+                    } else {
+                        cmp=rsc_strcmp(ca,cb);
+                        if(cmp<0) cmp=-1; else if(cmp>0) cmp=1;
+                    }
+                }
                 if(cmp>0){ u8 *tmp=ctx.rows[i]; ctx.rows[i]=ctx.rows[j]; ctx.rows[j]=tmp; u16 tl=ctx.lens[i]; ctx.lens[i]=ctx.lens[j]; ctx.lens[j]=tl; }
             }
         }
@@ -491,20 +658,31 @@ int db_query(Db *db, const char *sql, RscResult *res){
     int lim=s.has_limit? s.limit : ctx.nrows;
     if(lim>ctx.nrows) lim=ctx.nrows;
     if(s.is_count){
+        int v=ctx.nrows;
+        if(s.agg_col[0] && rsc_strcmp(s.agg_col,"*")!=0){
+            int cc=find_col(t,s.agg_col);
+            v=0;
+            for(int r=0;r<ctx.nrows;r++) if(!row_is_null(t,ctx.rows[r],cc)) v++;
+        }
         res->ncols=1; rsc_strcpy(res->cols[0],"COUNT");
         res->nrows=1;
-        char val[32]; int pos=0; int v=ctx.nrows; char rev[16]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
+        char val[32]; int pos=0; char rev[16]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
         rsc_strcpy(res->cells[0][0],val);
         return 0;
     }
     if(s.is_avg){
         int cidx=-1; for(int c=0;c<t->ncols;c++) if(rsc_strcmp(t->cols[c].name,s.agg_col)==0) cidx=c;
         if(cidx<0) return -1;
-        i64 sum=0;
-        for(int r=0;r<ctx.nrows;r++){ u8 *p=ctx.rows[r]; for(int k=0;k<cidx;k++){ if(t->cols[k].type==COL_INT) p+=8; else {u16 l=*(u16*)p; p+=2+l; } } i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8); sum+=v; }
-        i64 avg=ctx.nrows? sum/ctx.nrows : 0;
+        i64 sum=0; int n=0;
+        for(int r=0;r<ctx.nrows;r++){
+            if(row_is_null(t,ctx.rows[r],cidx)) continue;
+            char cb[64]={0}; row_cell_str(t,ctx.rows[r],cidx,cb,0);
+            sum+=parse_int_val(cb); n++;
+        }
         res->ncols=1; rsc_strcpy(res->cols[0],"AVG("); rsc_strcpy(res->cols[0]+4,s.agg_col); res->cols[0][4+rsc_strlen(s.agg_col)]=')'; res->cols[0][5+rsc_strlen(s.agg_col)]=0;
         res->nrows=1;
+        if(n==0){ rsc_strcpy(res->cells[0][0],"NULL"); return 0; }
+        i64 avg=sum/n;
         char val[32]; int pos=0; int neg=0; i64 v=avg; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
         rsc_strcpy(res->cells[0][0],val);
         return 0;
@@ -518,18 +696,13 @@ int db_query(Db *db, const char *sql, RscResult *res){
     res->nrows=lim;
     for(int r=0;r<lim;r++){
         u8 *row=ctx.rows[r];
-        char tmpvals[16][64];
-        {
-            u8 *p=row;
-            for(int c=0;c<t->ncols;c++){
-                char *dst=tmpvals[c];
-                if(t->cols[c].type==COL_INT){
-                    i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8);
-                    int pos=0; int neg=0; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) dst[pos++]=rev[k]; dst[pos]=0; p+=8;
-                } else { u16 l=*(u16*)p; if(l>63) l=63; rsc_memcpy(dst,p+2,l); dst[l]=0; p+=2+l; }
-            }
+        char tmpvals[16][64]; int tmpnull[16]={0};
+        decode_row_all(t,row,tmpvals,tmpnull);
+        for(int pi=0;pi<proj_n;pi++){
+            int c=proj_idx[pi];
+            if(tmpnull[c]) rsc_strcpy(res->cells[r][pi], "NULL");
+            else rsc_strcpy(res->cells[r][pi], tmpvals[c]);
         }
-        for(int pi=0;pi<proj_n;pi++) rsc_strcpy(res->cells[r][pi], tmpvals[proj_idx[pi]]);
     }
     return 0;
 }

@@ -13,7 +13,7 @@ struct Pager {
 #[repr(C)]
 struct Db {
     pager: *mut Pager,
-    _opaque: [u8; 11500],
+    _opaque: [u8; 32100],
 }
 
 #[repr(C)]

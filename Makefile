@@ -56,9 +56,9 @@ $(LIB_A): $(OBJS) | $(OUT)
 $(LIB_SO): $(OBJS) | $(OUT)
 	$(CC) -shared -o $@ $^
 
-test_runner: $(BUILD_DIR)/libs/string.o $(BUILD_DIR)/libs/mem.o $(BUILD_DIR)/arch/linux/arch.o $(BUILD_DIR)/core/pager.o $(BUILD_DIR)/core/btree.o $(BUILD_DIR)/core/txn.o $(BUILD_DIR)/core/dump.o $(BUILD_DIR)/core/debug.o $(BUILD_DIR)/core/sql/parser.o $(BUILD_DIR)/core/sql/executor.o $(BUILD_DIR)/core/sql/db.o
+test_runner: test/test.c $(BUILD_DIR)/libs/string.o $(BUILD_DIR)/libs/mem.o $(BUILD_DIR)/arch/linux/arch.o $(BUILD_DIR)/core/pager.o $(BUILD_DIR)/core/btree.o $(BUILD_DIR)/core/txn.o $(BUILD_DIR)/core/dump.o $(BUILD_DIR)/core/debug.o $(BUILD_DIR)/core/sql/parser.o $(BUILD_DIR)/core/sql/executor.o $(BUILD_DIR)/core/sql/db.o
 	mkdir -p $(BUILD_DIR)
-	$(AR) rcs $(BUILD_DIR)/librsc.a $^
+	$(AR) rcs $(BUILD_DIR)/librsc.a $(filter %.o,$^)
 	$(CC) $(CFLAGS_TEST) test/test.c $(BUILD_DIR)/librsc.a -o test_runner
 
 $(REPL_BIN): $(OBJS) | $(OUT)

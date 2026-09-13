@@ -4,3 +4,4 @@ out/
 bindings/rust/target
 bindings/java/build
 bindings/java/.gradle
+build

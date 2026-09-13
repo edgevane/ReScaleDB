@@ -12,12 +12,65 @@ static int parse_where(const char *p, Stmt *s){
     while(*p){
         p=skip_sp(p); if(!*p||*p==';') break;
         char col[32]={0},op[3]={0},val[64]={0};
-        int i=0; while(*p&&!rsc_isspace(*p)&&*p!='='&&*p!='<'&&*p!='>'&&i<31) col[i++]=*p++;
+        int i=0; while(*p&&!rsc_isspace(*p)&&*p!='='&&*p!='<'&&*p!='>'&&*p!='!'&&i<31) col[i++]=*p++;
         col[i]=0; p=skip_sp(p);
-        if(*p=='='||*p=='<'||*p=='>'){ int oi=0; op[oi++]=*p++; if(*p=='=') op[oi++]=*p++; op[oi]=0; }
+        // IS [NOT] NULL
+        {
+            char w1[8]={0}; int wi=0; const char *qq=p;
+            while(*qq&&!rsc_isspace(*qq)&&wi<7) w1[wi++]=rsc_tolower(*qq++);
+            w1[wi]=0;
+            if(eqi(w1,"is")){
+                p=skip_sp(qq);
+                char w2[8]={0}; wi=0; qq=p;
+                while(*qq&&!rsc_isspace(*qq)&&wi<7) w2[wi++]=rsc_tolower(*qq++);
+                w2[wi]=0;
+                if(eqi(w2,"not")){
+                    p=skip_sp(qq);
+                    char w3[8]={0}; wi=0; qq=p;
+                    while(*qq&&!rsc_isspace(*qq)&&wi<7) w3[wi++]=rsc_tolower(*qq++);
+                    w3[wi]=0;
+                    if(eqi(w3,"null")){
+                        p=qq;
+                        if(col[0] && s->nwhere<8){ rsc_strcpy(s->where[s->nwhere].col,col); s->where[s->nwhere].is_null_check=2; s->nwhere++; }
+                        p=skip_sp(p);
+                        char tmp[8]={0}; int ti=0; const char *qq2=p;
+                        while(*qq2&&!rsc_isspace(*qq2)&&ti<7) tmp[ti++]=rsc_tolower(*qq2++);
+                        tmp[ti]=0;
+                        if(eqi(tmp,"and")) p=qq2; else if(eqi(tmp,"order")||eqi(tmp,"limit")) break; else if(*p==';') break;
+                        continue;
+                    }
+                } else if(eqi(w2,"null")){
+                    p=qq;
+                    if(col[0] && s->nwhere<8){ rsc_strcpy(s->where[s->nwhere].col,col); s->where[s->nwhere].is_null_check=1; s->nwhere++; }
+                    p=skip_sp(p);
+                    char tmp[8]={0}; int ti=0; const char *qq2=p;
+                    while(*qq2&&!rsc_isspace(*qq2)&&ti<7) tmp[ti++]=rsc_tolower(*qq2++);
+                    tmp[ti]=0;
+                    if(eqi(tmp,"and")) p=qq2; else if(eqi(tmp,"order")||eqi(tmp,"limit")) break; else if(*p==';') break;
+                    continue;
+                }
+            }
+        }
+        if(*p=='='||*p=='<'||*p=='>'||*p=='!'){ int oi=0; op[oi++]=*p++; if(*p=='='||*p=='>') { if(oi<2) op[oi++]=*p++; } op[oi]=0; }
         p=skip_sp(p);
-        i=0; if(*p=='\''){ p++; while(*p&&*p!='\''&&i<63) val[i++]=*p++; if(*p=='\'') p++; } else { while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<63) val[i++]=*p++; } val[i]=0;
-        if(col[0]){ rsc_strcpy(s->where[s->nwhere].col,col); rsc_strcpy(s->where[s->nwhere].op,op[0]?op:"="); rsc_strcpy(s->where[s->nwhere].val,val); s->nwhere++; if(s->nwhere>=8) break; }
+        int quoted=0;
+        i=0; if(*p=='\''){ quoted=1; p++; while(*p&&*p!='\''&&i<63) val[i++]=*p++; if(*p=='\'') p++; } else { while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<63) val[i++]=*p++; } val[i]=0;
+        int val_is_null=0;
+        if(!quoted){
+            char vl[64]={0}; for(int k=0;val[k]&&k<63;k++) vl[k]=rsc_tolower(val[k]);
+            if(eqi(vl,"null")) val_is_null=1;
+        }
+        if(col[0]){
+            if(s->nwhere>=8) break;
+            rsc_strcpy(s->where[s->nwhere].col,col);
+            // normalize <> to !=
+            if(op[0]=='<'&&op[1]=='>'){ op[0]='!'; op[1]='='; op[2]=0; }
+            rsc_strcpy(s->where[s->nwhere].op,op[0]?op:"=");
+            rsc_strcpy(s->where[s->nwhere].val,val);
+            s->where[s->nwhere].val_is_null=val_is_null;
+            s->where[s->nwhere].is_null_check=0;
+            s->nwhere++;
+        }
         p=skip_sp(p);
         char tmp[8]={0}; int ti=0; const char *q=p; while(*q&&!rsc_isspace(*q)&&ti<7) tmp[ti++]=rsc_tolower(*q++); tmp[ti]=0;
         if(eqi(tmp,"and")) p=q; else if(eqi(tmp,"order")||eqi(tmp,"limit")) break; else if(*p==';') break;
@@ -41,10 +94,11 @@ int sql_parse(const char *sql, Stmt *out){
             if(*q=='('){
                 q++;
                 char pk_name[32]={0};
+                char uniq_name[32]={0};
                 while(1){
                     q=skip_sp(q);
                     if(*q==')'||!*q) break;
-                    // check for table-level PRIMARY KEY
+                    // check for table-level PRIMARY KEY / UNIQUE
                     {
                         char w1[16]={0}; int wi=0; const char *qq=q;
                         while(*qq&&!rsc_isspace(*qq)&&*qq!=','&&*qq!=')'&&*qq!='('&&wi<15) w1[wi++]=rsc_tolower(*qq++);
@@ -66,6 +120,18 @@ int sql_parse(const char *sql, Stmt *out){
                                 if(*q==',') q++;
                                 continue;
                             }
+                        } else if(eqi(w1,"unique")){
+                            q=qq; q=skip_sp(q);
+                            if(*q=='('){
+                                q++; q=skip_sp(q);
+                                int pi=0; while(*q&&*q!=')'&&*q!=','&&pi<31 && !rsc_isspace(*q)) uniq_name[pi++]=*q++;
+                                uniq_name[pi]=0; trim(uniq_name);
+                                while(*q&&*q!=')'&&*q!=',') q++;
+                                if(*q==')') q++;
+                            }
+                            q=skip_sp(q);
+                            if(*q==',') q++;
+                            continue;
                         }
                     }
                     char cn[32]={0}; int ci=0;
@@ -74,24 +140,61 @@ int sql_parse(const char *sql, Stmt *out){
                     char ct[16]={0}; int cti=0;
                     while(*q&&!rsc_isspace(*q)&&*q!=','&&*q!=')'&&cti<15) ct[cti++]=rsc_tolower(*q++);
                     ct[cti]=0;
-                    int is_pk=0;
-                    // check for inline PRIMARY KEY
-                    {
+                    int is_pk=0, is_unique=0, is_not_null=0, has_default=0, default_is_null=0;
+                    char default_val[64]={0};
+                    while(1){
                         const char *qs=skip_sp(q);
                         char w1[16]={0}; int wi=0; const char *qq=qs;
                         while(*qq&&!rsc_isspace(*qq)&&*qq!=','&&*qq!=')'&&wi<15) w1[wi++]=rsc_tolower(*qq++);
                         w1[wi]=0;
+                        if(!w1[0]) break;
                         if(eqi(w1,"primary")){
                             const char *qr=skip_sp(qq);
                             char w2[16]={0}; wi=0; while(*qr&&!rsc_isspace(*qr)&&*qr!=','&&*qr!=')'&&wi<15) w2[wi++]=rsc_tolower(*qr++);
                             w2[wi]=0;
-                            if(eqi(w2,"key")){ is_pk=1; q=qr; }
+                            if(eqi(w2,"key")){ is_pk=1; q=qr; continue; }
+                            break;
+                        } else if(eqi(w1,"unique")){
+                            is_unique=1; q=qq; continue;
+                        } else if(eqi(w1,"not")){
+                            const char *qr=skip_sp(qq);
+                            char w2[16]={0}; wi=0; while(*qr&&!rsc_isspace(*qr)&&*qr!=','&&*qr!=')'&&wi<15) w2[wi++]=rsc_tolower(*qr++);
+                            w2[wi]=0;
+                            if(eqi(w2,"null")){ is_not_null=1; q=qr; continue; }
+                            break;
+                        } else if(eqi(w1,"null")){
+                            q=qq; continue;
+                        } else if(eqi(w1,"default")){
+                            const char *qr=skip_sp(qq);
+                            has_default=1;
+                            if(*qr=='\''){
+                                qr++; int di=0;
+                                while(*qr&&*qr!='\''&&di<63) default_val[di++]=*qr++;
+                                default_val[di]=0;
+                                if(*qr=='\'') qr++;
+                                default_is_null=0;
+                            } else {
+                                char dw[64]={0}; int di=0;
+                                while(*qr&&!rsc_isspace(*qr)&&*qr!=','&&*qr!=')'&&di<63) dw[di++]=*qr++;
+                                dw[di]=0;
+                                char dwl[64]={0}; for(int k=0;dw[k]&&k<63;k++) dwl[k]=rsc_tolower(dw[k]);
+                                if(eqi(dwl,"null")){ default_is_null=1; default_val[0]=0; }
+                                else { default_is_null=0; rsc_strcpy(default_val,dw); }
+                            }
+                            q=qr; continue;
                         }
+                        break;
                     }
+                    if(is_pk){ is_unique=1; is_not_null=1; }
                     if(cn[0] && out->ncols<SQL_MAX_COLS){
                         rsc_strcpy(out->cols[out->ncols].name,cn);
                         out->cols[out->ncols].type=eqi(ct,"int")?COL_INT:COL_TEXT;
                         out->cols[out->ncols].is_pk=is_pk;
+                        out->cols[out->ncols].is_unique=is_unique;
+                        out->cols[out->ncols].is_not_null=is_not_null;
+                        out->cols[out->ncols].has_default=has_default;
+                        out->cols[out->ncols].default_is_null=default_is_null;
+                        rsc_strcpy(out->cols[out->ncols].default_val,default_val);
                         out->ncols++;
                     }
                     while(*q&&rsc_isspace(*q)) q++;
@@ -99,7 +202,10 @@ int sql_parse(const char *sql, Stmt *out){
                     else if(*q==')') break;
                 }
                 if(pk_name[0]){
-                    for(int k=0;k<out->ncols;k++) if(rsc_strcmp(out->cols[k].name,pk_name)==0) out->cols[k].is_pk=1;
+                    for(int k=0;k<out->ncols;k++) if(rsc_strcmp(out->cols[k].name,pk_name)==0){ out->cols[k].is_pk=1; out->cols[k].is_unique=1; out->cols[k].is_not_null=1; }
+                }
+                if(uniq_name[0]){
+                    for(int k=0;k<out->ncols;k++) if(rsc_strcmp(out->cols[k].name,uniq_name)==0) out->cols[k].is_unique=1;
                 }
             }
             return 0;
@@ -191,7 +297,18 @@ int sql_parse(const char *sql, Stmt *out){
         // parse vals
         out->nvals=0;
         while(*p&&*p!=')'&&out->nvals<SQL_MAX_COLS){
-            p=skip_sp(p); if(*p==',') {p++; continue;} if(*p==')') break; if(*p=='\''){p++; i=0; while(*p&&*p!='\''&&i<63) out->vals[out->nvals][i++]=*p++; out->vals[out->nvals][i]=0; if(*p=='\'') p++; } else { i=0; while(*p&&*p!=','&&*p!=')'&&i<63) out->vals[out->nvals][i++]=*p++; out->vals[out->nvals][i]=0; trim(out->vals[out->nvals]); } out->nvals++;
+            int cur=out->nvals;
+            out->vals_is_null[cur]=0; out->vals_is_default[cur]=0;
+            p=skip_sp(p); if(*p==',') {p++; continue;} if(*p==')') break;
+            if(*p=='\''){p++; i=0; while(*p&&*p!='\''&&i<63) out->vals[cur][i++]=*p++; out->vals[cur][i]=0; if(*p=='\'') p++; }
+            else {
+                i=0; while(*p&&*p!=','&&*p!=')'&&i<63) out->vals[cur][i++]=*p++;
+                out->vals[cur][i]=0; trim(out->vals[cur]);
+                char vl[64]={0}; for(int k=0;out->vals[cur][k]&&k<63;k++) vl[k]=rsc_tolower(out->vals[cur][k]);
+                if(eqi(vl,"null")) out->vals_is_null[cur]=1;
+                else if(eqi(vl,"default")) out->vals_is_default[cur]=1;
+            }
+            out->nvals++;
             p=skip_sp(p); if(*p==',') p++;
         }
         return 0;
@@ -294,9 +411,18 @@ int sql_parse(const char *sql, Stmt *out){
         char low[1024]; for(int k=0;buf[k];k++) low[k]=rsc_tolower(buf[k]); low[rsc_strlen(buf)]=0;
         const char *set=0; for(const char *t=low;*t;t++) if(t[0]=='s'&&t[1]=='e'&&t[2]=='t'){set=t;break;}
         if(set){ int off=set-low; p=buf+off+3; p=skip_sp(p); // parse col=val
-            char col[32]={0},val[64]={0}; i=0; while(*p&&*p!='='&&i<31) col[i++]=*p++; col[i]=0; trim(col); if(*p=='=') p++; p=skip_sp(p); if(*p=='\''){p++; i=0; while(*p&&*p!='\''&&i<63) val[i++]=*p++; val[i]=0; if(*p=='\'') p++;} else {i=0; while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<63) val[i++]=*p++; val[i]=0;} trim(val);
+            char col[32]={0},val[64]={0}; i=0; while(*p&&*p!='='&&i<31) col[i++]=*p++; col[i]=0; trim(col); if(*p=='=') p++; p=skip_sp(p);
+            int quoted=0;
+            if(*p=='\''){quoted=1; p++; i=0; while(*p&&*p!='\''&&i<63) val[i++]=*p++; val[i]=0; if(*p=='\'') p++;}
+            else {i=0; while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<63) val[i++]=*p++; val[i]=0;} trim(val);
             // store as first val with col name in where? reuse vals
             rsc_strcpy(out->cols[0].name,col); rsc_strcpy(out->vals[0],val); out->ncols=1; out->nvals=1;
+            out->vals_is_null[0]=0; out->vals_is_default[0]=0;
+            if(!quoted){
+                char vl[64]={0}; for(int k=0;val[k]&&k<63;k++) vl[k]=rsc_tolower(val[k]);
+                if(eqi(vl,"null")) out->vals_is_null[0]=1;
+                else if(eqi(vl,"default")) out->vals_is_default[0]=1;
+            }
             // where
             for(const char *t=low+(p-buf);*t;t++) if(t[0]=='w'&&t[1]=='h'&&t[2]=='e'&&t[3]=='r'&&t[4]=='e'){ int off2=t-low; p=buf+off2+5; char wb[512]={0}; int wi=0; int ws=p-buf; int we=rsc_strlen(buf); for(int k=ws;k<we&&wi<511;k++) wb[wi++]=buf[k]; wb[wi]=0; parse_where(wb,out); break; }
         }

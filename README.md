@@ -6,9 +6,11 @@ Fast embedded SQL database for Linux. Core is freestanding (no libc), mmap-backe
 
 - In-memory with `mmap(ANON)` + B+Tree (order 64, 4KB pages, copy-on-write)
 - MVCC single-writer / multi-reader
-- SQL: `CREATE/DROP DATABASE`, `USE`, `CREATE TABLE` with `PRIMARY KEY`, `CREATE INDEX`, `INSERT`, `SELECT` with `WHERE` (`= </> <= >=`), `AND`, `ORDER BY`, `LIMIT`, `UPDATE`, `DELETE`
-- `PRIMARY KEY` (single `INT` or `TEXT` column): uniqueness enforced on `INSERT`/`UPDATE`, persists in catalog (header v2)
-- Aggregates: `COUNT(*)`, `COUNT(col)`, `AVG(col)` (INT)
+- SQL: `CREATE/DROP DATABASE`, `USE`, `CREATE TABLE` with `PRIMARY KEY`/`UNIQUE`/`NOT NULL`/`DEFAULT`, `CREATE INDEX`, `INSERT`, `SELECT` with `WHERE` (`= != <> </> <= >=`, `IS NULL`, `IS NOT NULL`), `AND`, `ORDER BY` (NULLs last), `LIMIT`, `UPDATE`, `DELETE`
+- `PRIMARY KEY` (single `INT` or `TEXT` column): uniqueness enforced on `INSERT`/`UPDATE`, persists in catalog (header v3)
+- `UNIQUE`: enforced like PK but allows multiple `NULL`s
+- `NULL` literal, `NOT NULL` enforcement, `DEFAULT val` / `DEFAULT NULL` (use `DEFAULT` keyword in `INSERT`/`UPDATE`)
+- Aggregates skip `NULL`s: `COUNT(col)` counts non-null, `AVG(col)` averages non-null (`NULL` if none)
 - REPL shows tables, code gets structured results
 - Non-libc core (`src/libs` + `src/arch`), `arch/` only place with syscalls
 - Linux x86_64 and aarch64, GCC freestanding (`-nostdlib -ffreestanding`)
@@ -59,20 +61,36 @@ CREATE DATABASE app;
 USE app;
 DROP DATABASE app;
 
-CREATE TABLE users(id INT PRIMARY KEY, name TEXT);
+CREATE TABLE users(
+  id INT PRIMARY KEY,
+  email TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  nick TEXT DEFAULT 'anon',
+  age INT DEFAULT 18,
+  note TEXT
+);
 -- or: CREATE TABLE users(id INT, name TEXT, PRIMARY KEY (id));
+-- or: UNIQUE (email)
 CREATE INDEX idx ON users(id);
 
-INSERT INTO users VALUES (1, 'alice');
+INSERT INTO users VALUES (1, 'a@x', 'Ann', 'ann', 20, 'hi');
+INSERT INTO users VALUES (2, 'b@x', 'Bob', DEFAULT, DEFAULT, NULL);
 -- INSERT with duplicate PK fails: ERR duplicate primary key '1'
+-- INSERT with duplicate UNIQUE fails: ERR duplicate value 'a@x' for UNIQUE 'email'
+-- INSERT NULL into NOT NULL fails: ERR column 'name' cannot be null
 
 SELECT * FROM users;
 SELECT * FROM users WHERE id > 1 AND name = 'bob' ORDER BY id LIMIT 10;
+SELECT * FROM users WHERE nick IS NULL;
+SELECT * FROM users WHERE age IS NOT NULL;
+SELECT * FROM users WHERE name != 'Ann';
 SELECT COUNT(*) FROM users;
-SELECT COUNT(*) FROM users WHERE val > 10;
-SELECT AVG(val) FROM t;
+SELECT COUNT(nick) FROM users;   -- counts non-null only
+SELECT AVG(age) FROM users;      -- ignores NULL, NULL if none
 
-UPDATE users SET name = 'bob' WHERE id = 1;
+UPDATE users SET nick = NULL WHERE id = 1;
+UPDATE users SET age = DEFAULT WHERE id = 1;
+
 DELETE FROM users WHERE id = 1;
 
 DUMP ALL TO 'state.dump';
@@ -102,10 +120,13 @@ CREATE TABLE t(id INT, name TEXT, PRIMARY KEY (id));
 
 Rules:
 
-- one `PRIMARY KEY` per table, `INT` or `TEXT`
+- one `PRIMARY KEY` per table, `INT` or `TEXT` (implies `UNIQUE` + `NOT NULL`)
+- `UNIQUE` allows multiple `NULL`s, `PRIMARY KEY` does not (rejects `NULL`)
 - `INSERT` with existing PK value fails: `ERR duplicate primary key '1'`
-- `UPDATE` of the PK column to an existing value fails the same way
-- PK survives `DUMP ALL` / `LOAD ALL` (catalog header v2, old v1 files load with no PK)
+- `INSERT` with existing `UNIQUE` value fails: `ERR duplicate value 'a@x' for UNIQUE 'email'`
+- `INSERT`/`UPDATE` `NULL` into `NOT NULL` fails: `ERR column 'name' cannot be null`
+- `UPDATE` of the PK/`UNIQUE` column to an existing value fails the same way
+- constraints survive `DUMP ALL` / `LOAD ALL` (catalog header v3, old v1/v2 files load without new constraints; old row images without null bitmap decode as all non-null)
 - `rsc_enable_debug(1)` prints PK info on duplicate:
 
 ```
@@ -247,7 +268,8 @@ cargo test
 ## File Format
 
 - In-memory: `mmap(ANON)` 4KB pages, header at page 0 (magic `0x52534344`, version, page_count, root, freelist, txn_id, catalog at offset 64)
-- Catalog: `ntables` + per-table `name, ncols, cols(name, type, is_pk), root, rowid_seq, pk_col` stored in header (v2)
+- Catalog: `ntables` + per-table `name, ncols, cols(name, type, is_pk, is_unique, is_not_null, has_default, default_is_null, default_val), root, rowid_seq, pk_col, has_nullmap` stored in header (v3)
+- Rows (v3 tables): `u16 null-bitmap` + non-null columns (`INT` 8B LE, `TEXT` u16 len + bytes); `NULL` shows as `NULL`; legacy v1/v2 rows decode as all non-null
 - `DUMP`: raw `mmap` image (`map_len` bytes) saved to file, single file for all DBs
 - `LOAD`: file read back into anon `mmap`, catalog reloaded
 

@@ -4,15 +4,17 @@
 #define SQL_MAX_COLS 16
 #define SQL_MAX_TABLES 16
 typedef enum { COL_INT, COL_TEXT } ColType;
-typedef struct { char name[32]; ColType type; int is_pk; } Column;
-typedef struct { char name[32]; Column cols[SQL_MAX_COLS]; int ncols; int pk_col; u64 root; u64 rowid_seq; } Table;
+typedef struct { char name[32]; ColType type; int is_pk; int is_unique; int is_not_null; int has_default; int default_is_null; char default_val[64]; } Column;
+typedef struct { char name[32]; Column cols[SQL_MAX_COLS]; int ncols; int pk_col; int has_nullmap; u64 root; u64 rowid_seq; } Table;
 typedef enum { STMT_CREATE, STMT_INSERT, STMT_SELECT, STMT_UPDATE, STMT_DELETE, STMT_CREATE_IDX, STMT_CREATE_DB, STMT_DROP_DB, STMT_USE, STMT_DUMP_ALL, STMT_LOAD_ALL, STMT_UNKNOWN } StmtKind;
-typedef struct { char col[32]; char op[3]; char val[64]; } WhereClause;
+typedef struct { char col[32]; char op[3]; char val[64]; int val_is_null; int is_null_check; } WhereClause;
 typedef struct {
     StmtKind kind;
     char table[32];
     Column cols[SQL_MAX_COLS]; int ncols;
     char vals[SQL_MAX_COLS][64]; int nvals;
+    int vals_is_null[SQL_MAX_COLS];
+    int vals_is_default[SQL_MAX_COLS];
     WhereClause where[8]; int nwhere;
     char order_by[32]; int has_order;
     int limit; int has_limit;

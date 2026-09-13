@@ -66,6 +66,13 @@ static void print_table_info(Db *db, const char *tname, Table *t){
         w("  ");
         w(coltype_name(t->cols[i].type));
         if(i==t->pk_col) w("  PRIMARY KEY");
+        if(t->cols[i].is_unique && i!=t->pk_col) w("  UNIQUE");
+        if(t->cols[i].is_not_null && i!=t->pk_col) w("  NOT NULL");
+        if(t->cols[i].has_default){
+            w("  DEFAULT ");
+            if(t->cols[i].default_is_null) w("NULL");
+            else w(t->cols[i].default_val);
+        }
         arch_write(2, "\n", 1);
     }
     wline("");
@@ -166,4 +173,24 @@ void rsc_debug_unknown_column(Db *db, Stmt *s, const char *bad_col, const char *
     w(bad_col);
     wline("' does not exist");
     wline("");
+}
+
+void rsc_debug_constraint(Db *db, Stmt *s, const char *col, const char *errmsg){
+    if(!debug_on) return;
+    int idx=-1;
+    for(int i=0;i<db->ntables;i++) if(rsc_strcmp(db->tables[i].name,s->table)==0){ idx=i; break; }
+    print_header_query(s);
+    if(idx<0){
+        print_table_info(db, s->table, 0);
+    } else {
+        Table *t=&db->tables[idx];
+        print_table_info(db, s->table, t);
+        wline("Column:");
+        w("    ");
+        wline(col);
+        wline("");
+    }
+    wline("Error:");
+    w("    ");
+    wline(errmsg);
 }

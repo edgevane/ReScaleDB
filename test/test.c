@@ -23,6 +23,23 @@ int main(){
     db_exec(&db,"SELECT * FROM t WHERE id = 2",out,sizeof(out)); printf("after update: %s\n",out);
     ASSERT(strstr(out,"bb")!=0,"update reflected");
     db_close(&db);
+    Db m; db_init(&m);
+    ASSERT(db_exec(&m,"CREATE TABLE u (id INT PRIMARY KEY, email TEXT UNIQUE NOT NULL, nick TEXT DEFAULT 'anon', age INT DEFAULT 18, note TEXT)",out,sizeof(out))==0,"create constraints");
+    ASSERT(db_exec(&m,"INSERT INTO u VALUES (1, 'a@x', 'ann', 20, 'hi')",out,sizeof(out))==0,"insert pk/unique");
+    ASSERT(db_exec(&m,"INSERT INTO u VALUES (1, 'b@x', 'b', 1, NULL)",out,sizeof(out))!=0,"dup pk rejected");
+    ASSERT(db_exec(&m,"INSERT INTO u VALUES (2, 'a@x', 'b', 1, NULL)",out,sizeof(out))!=0,"dup unique rejected");
+    ASSERT(db_exec(&m,"INSERT INTO u VALUES (3, NULL, 'c', 1, NULL)",out,sizeof(out))!=0,"not null rejected");
+    ASSERT(db_exec(&m,"INSERT INTO u VALUES (4, 'd@x', DEFAULT, DEFAULT, NULL)",out,sizeof(out))==0,"default applied");
+    ASSERT(db_exec(&m,"INSERT INTO u VALUES (5, NULL, 'e', 1, NULL)",out,sizeof(out))!=0,"null unique notnull rejected");
+    db_exec(&m,"SELECT * FROM u WHERE id = 4",out,sizeof(out));
+    ASSERT(strstr(out,"anon")!=0 && strstr(out,"18")!=0,"default values stored");
+    ASSERT(db_exec(&m,"INSERT INTO u VALUES (6, 'f@x', NULL, 2, NULL)",out,sizeof(out))==0,"null allowed");
+    db_exec(&m,"SELECT * FROM u WHERE nick IS NULL",out,sizeof(out));
+    ASSERT(strstr(out,"f@x")!=0,"is null works");
+    db_exec(&m,"SELECT COUNT(nick) FROM u",out,sizeof(out));
+    ASSERT(strstr(out,"2")!=0,"count skips nulls");
+    ASSERT(db_exec(&m,"UPDATE u SET email = NULL WHERE id = 1",out,sizeof(out))!=0,"update to null rejected");
+    db_close(&m);
     // btree direct isolated
     Pager p2; pager_open(&p2,"/tmp/bt_test.rsc.db");
     u64 root=0; btree_create(&p2,&root);
