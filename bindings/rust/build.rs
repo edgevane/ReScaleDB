@@ -11,6 +11,7 @@ fn main() {
     b.file("c_src/core/btree.c");
     b.file("c_src/core/txn.c");
     b.file("c_src/core/dump.c");
+    b.file("c_src/core/debug.c");
     b.file("c_src/core/sql/parser.c");
     b.file("c_src/core/sql/executor.c");
     b.file("c_src/core/sql/db.c");

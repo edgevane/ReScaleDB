@@ -65,3 +65,8 @@ JNIEXPORT void JNICALL Java_dev_aplominski_rescaledb_Database_nClose(JNIEnv *env
     db_close(db);
     free(db);
 }
+
+JNIEXPORT void JNICALL Java_dev_aplominski_rescaledb_Database_nEnableDebug(JNIEnv *env, jclass cls, jint on) {
+    extern void rsc_enable_debug(int on);
+    rsc_enable_debug(on);
+}

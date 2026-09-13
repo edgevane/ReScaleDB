@@ -110,7 +110,8 @@ task buildNative(type: Exec) {
             ../../src/core/pager.c \\
             ../../src/core/btree.c \\
             ../../src/core/txn.c \\
-            ../../src/core/dump.c \\
+            ../../src/core/dump.c \
+            ../../src/core/debug.c \\
             ../../src/core/sql/parser.c \\
             ../../src/core/sql/executor.c \\
             ../../src/core/sql/db.c \\
@@ -128,7 +129,8 @@ task buildNative(type: Exec) {
                 ../../src/core/pager.c \\
                 ../../src/core/btree.c \\
                 ../../src/core/txn.c \\
-                ../../src/core/dump.c \\
+                ../../src/core/dump.c \
+            ../../src/core/debug.c \\
                 ../../src/core/sql/parser.c \\
                 ../../src/core/sql/executor.c \\
                 ../../src/core/sql/db.c \\

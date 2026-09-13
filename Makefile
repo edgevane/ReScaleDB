@@ -13,7 +13,7 @@ CFLAGS_CORE=-Wall -Wextra -O2 -ffreestanding -nostdlib -nostdinc -fno-builtin -I
 CFLAGS_TEST=-Wall -Wextra -O2 -Isrc -g
 SRC_LIBS=src/libs/string.c src/libs/mem.c
 SRC_ARCH=src/arch/linux/arch.c
-SRC_CORE=src/core/pager.c src/core/btree.c src/core/txn.c src/core/dump.c src/core/sql/parser.c src/core/sql/executor.c src/core/sql/db.c
+SRC_CORE=src/core/pager.c src/core/btree.c src/core/txn.c src/core/dump.c src/core/debug.c src/core/sql/parser.c src/core/sql/executor.c src/core/sql/db.c
 BUILD_DIR=build/$(ARCH)
 OBJ_LIBS=$(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SRC_LIBS))
 OBJ_ARCH=$(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SRC_ARCH))
@@ -24,7 +24,7 @@ OUT=out/$(ARCH)
 LIB_A=$(OUT)/librsc.a
 LIB_SO=$(OUT)/librsc.so
 
-HEADERS=src/libs/types.h src/libs/string.h src/libs/mem.h src/libs/ctype.h src/arch/arch.h src/core/pager.h src/core/btree.h src/core/txn.h src/core/dump.h src/core/sql/sql.h
+HEADERS=src/libs/types.h src/libs/string.h src/libs/mem.h src/libs/ctype.h src/arch/arch.h src/core/pager.h src/core/btree.h src/core/txn.h src/core/dump.h src/core/debug.h src/core/sql/sql.h
 
 REPL_SRC=repl/repl.c
 REPL_BIN=$(OUT)/repl
@@ -56,7 +56,7 @@ $(LIB_A): $(OBJS) | $(OUT)
 $(LIB_SO): $(OBJS) | $(OUT)
 	$(CC) -shared -o $@ $^
 
-test_runner: $(BUILD_DIR)/libs/string.o $(BUILD_DIR)/libs/mem.o $(BUILD_DIR)/arch/linux/arch.o $(BUILD_DIR)/core/pager.o $(BUILD_DIR)/core/btree.o $(BUILD_DIR)/core/txn.o $(BUILD_DIR)/core/dump.o $(BUILD_DIR)/core/sql/parser.o $(BUILD_DIR)/core/sql/executor.o $(BUILD_DIR)/core/sql/db.o
+test_runner: $(BUILD_DIR)/libs/string.o $(BUILD_DIR)/libs/mem.o $(BUILD_DIR)/arch/linux/arch.o $(BUILD_DIR)/core/pager.o $(BUILD_DIR)/core/btree.o $(BUILD_DIR)/core/txn.o $(BUILD_DIR)/core/dump.o $(BUILD_DIR)/core/debug.o $(BUILD_DIR)/core/sql/parser.o $(BUILD_DIR)/core/sql/executor.o $(BUILD_DIR)/core/sql/db.o
 	mkdir -p $(BUILD_DIR)
 	$(AR) rcs $(BUILD_DIR)/librsc.a $^
 	$(CC) $(CFLAGS_TEST) test/test.c $(BUILD_DIR)/librsc.a -o test_runner

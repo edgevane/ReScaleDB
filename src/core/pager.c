@@ -21,7 +21,7 @@ int pager_open(Pager *p, const char *path){
     if(p->hdr->magic!=RSC_MAGIC){
         rsc_memset(p->hdr,0,RSC_PAGE_SIZE);
         p->hdr->magic=RSC_MAGIC;
-        p->hdr->version=1;
+        p->hdr->version=RSC_VERSION;
         p->hdr->page_size=RSC_PAGE_SIZE;
         p->hdr->page_count=(u32)(p->map_len/RSC_PAGE_SIZE);
         p->hdr->root_pageno=0;
@@ -43,7 +43,7 @@ int pager_open_mem(Pager *p, usize pages){
     p->hdr=(RscHeader*)m;
     rsc_memset(p->hdr,0,RSC_PAGE_SIZE);
     p->hdr->magic=RSC_MAGIC;
-    p->hdr->version=1;
+    p->hdr->version=RSC_VERSION;
     p->hdr->page_size=RSC_PAGE_SIZE;
     p->hdr->page_count=(u32)pages;
     p->hdr->root_pageno=0;

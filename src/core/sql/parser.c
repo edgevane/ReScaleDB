@@ -26,6 +26,8 @@ static int parse_where(const char *p, Stmt *s){
 }
 int sql_parse(const char *sql, Stmt *out){
     rsc_memset(out,0,sizeof(*out));
+    rsc_strncpy(out->orig_sql, sql, 255); out->orig_sql[255]=0;
+    trim(out->orig_sql);
     char buf[1024]; rsc_strncpy(buf,sql,1023); buf[1023]=0;
     const char *p=skip_sp(buf);
     char first[16]={0}; int i=0; while(*p&&!rsc_isspace(*p)&&i<15) first[i++]=rsc_tolower(*p++); first[i]=0;
@@ -35,7 +37,71 @@ int sql_parse(const char *sql, Stmt *out){
             out->kind=STMT_CREATE;
             p=skip_sp(p); i=0; while(*p&&!rsc_isspace(*p)&&*p!='('&&i<31) out->table[i++]=*p++; out->table[i]=0;
             // manual find '('
-            const char *q=p; while(*q&&*q!='(') q++; if(*q=='('){ q++; while(1){ q=skip_sp(q); if(*q==')'||!*q) break; char cn[32]={0}; int ci=0; while(*q&&*q!=')'&&!rsc_isspace(*q)&&*q!=','&&ci<31) cn[ci++]=*q++; cn[ci]=0; q=skip_sp(q); char ct[16]={0}; int cti=0; while(*q&&!rsc_isspace(*q)&&*q!=','&&*q!=')'&&cti<15) ct[cti++]=rsc_tolower(*q++); ct[cti]=0; if(cn[0]){ rsc_strcpy(out->cols[out->ncols].name,cn); out->cols[out->ncols].type=eqi(ct,"int")?COL_INT:COL_TEXT; out->ncols++; } while(*q&&rsc_isspace(*q)) q++; if(*q==',') q++; else if(*q==')') break; }}
+            const char *q=p; while(*q&&*q!='(') q++;
+            if(*q=='('){
+                q++;
+                char pk_name[32]={0};
+                while(1){
+                    q=skip_sp(q);
+                    if(*q==')'||!*q) break;
+                    // check for table-level PRIMARY KEY
+                    {
+                        char w1[16]={0}; int wi=0; const char *qq=q;
+                        while(*qq&&!rsc_isspace(*qq)&&*qq!=','&&*qq!=')'&&*qq!='('&&wi<15) w1[wi++]=rsc_tolower(*qq++);
+                        w1[wi]=0;
+                        if(eqi(w1,"primary")){
+                            q=qq; q=skip_sp(q);
+                            char w2[16]={0}; wi=0; while(*q&&!rsc_isspace(*q)&&*q!=','&&*q!=')'&&*q!='('&&wi<15) w2[wi++]=rsc_tolower(*q++);
+                            w2[wi]=0;
+                            if(eqi(w2,"key")){
+                                q=skip_sp(q);
+                                if(*q=='('){
+                                    q++; q=skip_sp(q);
+                                    int pi=0; while(*q&&*q!=')'&&*q!=','&&pi<31 && !rsc_isspace(*q)) pk_name[pi++]=*q++;
+                                    pk_name[pi]=0; trim(pk_name);
+                                    while(*q&&*q!=')'&&*q!=',') q++;
+                                    if(*q==')') q++;
+                                }
+                                q=skip_sp(q);
+                                if(*q==',') q++;
+                                continue;
+                            }
+                        }
+                    }
+                    char cn[32]={0}; int ci=0;
+                    while(*q&&*q!=')'&&!rsc_isspace(*q)&&*q!=','&&ci<31) cn[ci++]=*q++;
+                    cn[ci]=0; q=skip_sp(q);
+                    char ct[16]={0}; int cti=0;
+                    while(*q&&!rsc_isspace(*q)&&*q!=','&&*q!=')'&&cti<15) ct[cti++]=rsc_tolower(*q++);
+                    ct[cti]=0;
+                    int is_pk=0;
+                    // check for inline PRIMARY KEY
+                    {
+                        const char *qs=skip_sp(q);
+                        char w1[16]={0}; int wi=0; const char *qq=qs;
+                        while(*qq&&!rsc_isspace(*qq)&&*qq!=','&&*qq!=')'&&wi<15) w1[wi++]=rsc_tolower(*qq++);
+                        w1[wi]=0;
+                        if(eqi(w1,"primary")){
+                            const char *qr=skip_sp(qq);
+                            char w2[16]={0}; wi=0; while(*qr&&!rsc_isspace(*qr)&&*qr!=','&&*qr!=')'&&wi<15) w2[wi++]=rsc_tolower(*qr++);
+                            w2[wi]=0;
+                            if(eqi(w2,"key")){ is_pk=1; q=qr; }
+                        }
+                    }
+                    if(cn[0] && out->ncols<SQL_MAX_COLS){
+                        rsc_strcpy(out->cols[out->ncols].name,cn);
+                        out->cols[out->ncols].type=eqi(ct,"int")?COL_INT:COL_TEXT;
+                        out->cols[out->ncols].is_pk=is_pk;
+                        out->ncols++;
+                    }
+                    while(*q&&rsc_isspace(*q)) q++;
+                    if(*q==',') q++;
+                    else if(*q==')') break;
+                }
+                if(pk_name[0]){
+                    for(int k=0;k<out->ncols;k++) if(rsc_strcmp(out->cols[k].name,pk_name)==0) out->cols[k].is_pk=1;
+                }
+            }
             return 0;
         } else if(eqi(second,"index")){
             out->kind=STMT_CREATE_IDX;
@@ -150,6 +216,38 @@ int sql_parse(const char *sql, Stmt *out){
                 out->is_avg=1;
                 char *po=0,*pc=0; for(char *c=slp;*c;c++){ if(*c=='('&&!po) po=c; if(*c==')') pc=c; }
                 if(po&&pc){ int ci=0; for(char *c=po+1;c<pc&&ci<31;c++) if(!rsc_isspace(*c)) out->agg_col[ci++]=*c; out->agg_col[ci]=0; }
+            } else {
+                char tmp[256]; rsc_strcpy(tmp, s);
+                trim(tmp);
+                if(tmp[0]=='*' && (tmp[1]==0 || rsc_isspace(tmp[1]))){
+                    out->is_star=1;
+                } else if(tmp[0]){
+                    out->nselect=0;
+                    char *cur=tmp;
+                    while(*cur && out->nselect<16){
+                        while(rsc_isspace(*cur)) cur++;
+                        if(!*cur) break;
+                        char *end=cur;
+                        while(*end && *end!=',') end++;
+                        char col[32]={0}; int ci=0;
+                        for(char *c=cur;c<end && ci<31;c++){
+                            if(!rsc_isspace(*c)) col[ci++]=*c;
+                        }
+                        col[ci]=0;
+                        // strip trailing ; if any
+                        for(int k=0;col[k];k++) if(col[k]==';'){ col[k]=0; break; }
+                        trim(col);
+                        if(col[0]){
+                            rsc_strcpy(out->select_cols[out->nselect], col);
+                            out->nselect++;
+                        }
+                        if(*end==',') cur=end+1;
+                        else break;
+                    }
+                    if(out->nselect==1 && rsc_strcmp(out->select_cols[0],"*")==0){
+                        out->is_star=1; out->nselect=0;
+                    }
+                }
             }
         }
         if(from){ int off=from-low; p=buf+off+4; p=skip_sp(p); i=0; while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<31) out->table[i++]=*p++; out->table[i]=0; p=skip_sp(p);

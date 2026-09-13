@@ -43,6 +43,7 @@ public class Database implements AutoCloseable {
     private static native int nExec(long handle, String sql, byte[] out);
     private static native int nQuery(long handle, String sql, QueryResult res);
     private static native void nClose(long handle);
+    private static native void nEnableDebug(int on);
 
     public Database() {
         handle = nInit();
@@ -64,6 +65,10 @@ public class Database implements AutoCloseable {
         int rc = nQuery(handle, sql, r);
         if (rc != 0) throw new RuntimeException("query failed: " + sql);
         return r;
+    }
+
+    public void enableDebug(boolean on) {
+        nEnableDebug(on ? 1 : 0);
     }
 
     @Override

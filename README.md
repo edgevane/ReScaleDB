@@ -6,7 +6,8 @@ Fast embedded SQL database for Linux. Core is freestanding (no libc), mmap-backe
 
 - In-memory with `mmap(ANON)` + B+Tree (order 64, 4KB pages, copy-on-write)
 - MVCC single-writer / multi-reader
-- SQL: `CREATE/DROP DATABASE`, `USE`, `CREATE TABLE`, `CREATE INDEX`, `INSERT`, `SELECT` with `WHERE` (`= </> <= >=`), `AND`, `ORDER BY`, `LIMIT`, `UPDATE`, `DELETE`
+- SQL: `CREATE/DROP DATABASE`, `USE`, `CREATE TABLE` with `PRIMARY KEY`, `CREATE INDEX`, `INSERT`, `SELECT` with `WHERE` (`= </> <= >=`), `AND`, `ORDER BY`, `LIMIT`, `UPDATE`, `DELETE`
+- `PRIMARY KEY` (single `INT` or `TEXT` column): uniqueness enforced on `INSERT`/`UPDATE`, persists in catalog (header v2)
 - Aggregates: `COUNT(*)`, `COUNT(col)`, `AVG(col)` (INT)
 - REPL shows tables, code gets structured results
 - Non-libc core (`src/libs` + `src/arch`), `arch/` only place with syscalls
@@ -58,10 +59,12 @@ CREATE DATABASE app;
 USE app;
 DROP DATABASE app;
 
-CREATE TABLE users(id INT, name TEXT);
+CREATE TABLE users(id INT PRIMARY KEY, name TEXT);
+-- or: CREATE TABLE users(id INT, name TEXT, PRIMARY KEY (id));
 CREATE INDEX idx ON users(id);
 
 INSERT INTO users VALUES (1, 'alice');
+-- INSERT with duplicate PK fails: ERR duplicate primary key '1'
 
 SELECT * FROM users;
 SELECT * FROM users WHERE id > 1 AND name = 'bob' ORDER BY id LIMIT 10;
@@ -88,6 +91,41 @@ LOAD ALL FROM 'state.dump';
 ```
 
 In code, `SELECT` returns structured data (see C/Rust API).
+
+## Primary key
+
+```sql
+CREATE TABLE users(id INT PRIMARY KEY, name TEXT);
+CREATE TABLE keys(name TEXT PRIMARY KEY, v INT);
+CREATE TABLE t(id INT, name TEXT, PRIMARY KEY (id));
+```
+
+Rules:
+
+- one `PRIMARY KEY` per table, `INT` or `TEXT`
+- `INSERT` with existing PK value fails: `ERR duplicate primary key '1'`
+- `UPDATE` of the PK column to an existing value fails the same way
+- PK survives `DUMP ALL` / `LOAD ALL` (catalog header v2, old v1 files load with no PK)
+- `rsc_enable_debug(1)` prints PK info on duplicate:
+
+```
+[ReScaleDB DEBUG]
+
+Query:
+    INSERT INTO users VALUES (1, 'b');
+
+Table: users
+
+Available columns:
+    0: id  INT  PRIMARY KEY
+    1: name  TEXT
+
+Primary key:
+    id (must be unique)
+
+Error:
+    duplicate primary key '1'
+```
 
 ## REPL
 
@@ -209,7 +247,7 @@ cargo test
 ## File Format
 
 - In-memory: `mmap(ANON)` 4KB pages, header at page 0 (magic `0x52534344`, version, page_count, root, freelist, txn_id, catalog at offset 64)
-- Catalog: `ntables` + per-table `name, ncols, cols, root, rowid_seq` stored in header
+- Catalog: `ntables` + per-table `name, ncols, cols(name, type, is_pk), root, rowid_seq, pk_col` stored in header (v2)
 - `DUMP`: raw `mmap` image (`map_len` bytes) saved to file, single file for all DBs
 - `LOAD`: file read back into anon `mmap`, catalog reloaded
 

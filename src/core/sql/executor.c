@@ -1,10 +1,81 @@
 #include "sql.h"
 #include "../btree.h"
 #include "../dump.h"
+#include "../debug.h"
 #include "../../libs/string.h"
 #include "../../libs/ctype.h"
 #include "../../arch/arch.h"
 static int find_table(Db *db,const char *name){ for(int i=0;i<db->ntables;i++) if(rsc_strcmp(db->tables[i].name,name)==0) return i; return -1; }
+static int find_col(Table *t, const char *name){ for(int i=0;i<t->ncols;i++) if(rsc_strcmp(t->cols[i].name,name)==0) return i; return -1; }
+static void set_col_error(char *out, usize cap, const char *col){
+    if(!out||!cap) return;
+    rsc_memset(out,0,cap);
+    rsc_strncpy(out,"ERR column '",cap-1);
+    usize l=rsc_strlen(out);
+    if(l+32<cap){ rsc_strcpy(out+l,col); l+=rsc_strlen(col); }
+    if(l+20<cap) rsc_strcpy(out+l,"' does not exist\n");
+    out[cap-1]=0;
+}
+static void set_table_error(char *out, usize cap, const char *tab){
+    if(!out||!cap) return;
+    rsc_memset(out,0,cap);
+    rsc_strncpy(out,"ERR table '",cap-1);
+    usize l=rsc_strlen(out);
+    if(l+32<cap){ rsc_strcpy(out+l,tab); l+=rsc_strlen(tab); }
+    if(l+20<cap) rsc_strcpy(out+l,"' does not exist\n");
+    out[cap-1]=0;
+}
+static void set_pk_error(char *out, usize cap, const char *val){
+    if(!out||!cap) return;
+    rsc_memset(out,0,cap);
+    rsc_strncpy(out,"ERR duplicate primary key '",cap-1);
+    usize l=rsc_strlen(out);
+    if(l+64<cap){ rsc_strcpy(out+l,val); l+=rsc_strlen(val); }
+    if(l+3<cap) rsc_strcpy(out+l,"'\n");
+    out[cap-1]=0;
+}
+static long parse_int_val(const char *p){
+    long v=0; int neg=0;
+    if(*p=='-'){neg=1;p++;}
+    while(*p&&rsc_isdigit(*p)) v=v*10+(*p++-'0');
+    if(neg) v=-v;
+    return v;
+}
+static int pk_value_exists(Db *db, Table *t, const char *val_str){
+    if(t->pk_col<0) return 0;
+    int pk=t->pk_col;
+    long want_int=0;
+    if(t->cols[pk].type==COL_INT) want_int=parse_int_val(val_str);
+    u64 pn=t->root;
+    while(pn){
+        BNode *n=(BNode*)pager_get(db->pager,pn);
+        if(!n||n->is_leaf) break;
+        if(n->nkeys==0) break;
+        u8 *e=(u8*)n+n->offs[0]; u16 ek=*(u16*)e;
+        pn=*(u64*)(e+2+ek);
+    }
+    while(pn){
+        BNode *n=(BNode*)pager_get(db->pager,pn);
+        if(!n) break;
+        for(int i=0;i<n->nkeys;i++){
+            u8 *e=(u8*)n+n->offs[i];
+            u16 kl=*(u16*)e;
+            u8 *row=e+4+kl;
+            u8 *p=row;
+            for(int k=0;k<pk;k++){ if(t->cols[k].type==COL_INT) p+=8; else { u16 l=*(u16*)p; p+=2+l; } }
+            if(t->cols[pk].type==COL_INT){
+                i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8);
+                if(v==(i64)want_int) return 1;
+            } else {
+                u16 l=*(u16*)p;
+                usize vl=rsc_strlen(val_str);
+                if(l==vl && rsc_memcmp(p+2,val_str,l)==0) return 1;
+            }
+        }
+        pn=n->next_leaf;
+    }
+    return 0;
+}
 static u64 enc_key_rowid(u64 id, u8 *out){ for(int i=7;i>=0;i--) out[i]=id&0xFF, id>>=8; return 8; }
 static int eval_where(Table *t, u8 *row, WhereClause *w){
     // row format: for each col i: if INT 8 bytes, if TEXT u16 len + bytes
@@ -105,9 +176,13 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
     if(s->kind==STMT_CREATE){
         if(db->ntables>=SQL_MAX_TABLES) return -1;
         if(find_table(db,s->table)>=0) return -1;
+        int pk_count=0; int pk_idx=-1;
+        for(int i=0;i<s->ncols;i++) if(s->cols[i].is_pk){ pk_count++; pk_idx=i; }
+        if(pk_count>1){ if(out&&cap) rsc_strcpy(out,"ERR multiple primary keys\n"); return -1; }
         Table *t=&db->tables[db->ntables++];
         rsc_strcpy(t->name,s->table);
         t->ncols=s->ncols; for(int i=0;i<s->ncols;i++) t->cols[i]=s->cols[i];
+        t->pk_col=pk_idx;
         t->rowid_seq=1;
         u64 root=0; btree_create(db->pager,&root); t->root=root;
         // persist catalog into pager hdr root as simple? also store in catalog btree if exists
@@ -121,9 +196,20 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         return 0;
     }
     if(s->kind==STMT_INSERT){
-        int idx=find_table(db,s->table); if(idx<0) return -1;
+        int idx=find_table(db,s->table);
+        if(idx<0){ rsc_debug_unknown_table(db,s,s->table); set_table_error(out,cap,s->table); return -1; }
         Table *t=&db->tables[idx];
-        if(s->nvals != t->ncols) return -1;
+        if(s->nvals != t->ncols){ if(out&&cap) rsc_strcpy(out,"ERR column count\n"); return -1; }
+        if(t->pk_col>=0){
+            const char *pkval=s->vals[t->pk_col];
+            if(!pkval[0]){ if(out&&cap) rsc_strcpy(out,"ERR primary key required\n"); return -1; }
+            if(pk_value_exists(db,t,pkval)){
+                extern void rsc_debug_duplicate_pk(Db *db, Stmt *s, const char *val);
+                rsc_debug_duplicate_pk(db,s,pkval);
+                set_pk_error(out,cap,pkval);
+                return -1;
+            }
+        }
         u8 row[1024]; int off=0;
         for(int i=0;i<t->ncols;i++){
             if(t->cols[i].type==COL_INT){
@@ -140,8 +226,30 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         return 0;
     }
     if(s->kind==STMT_SELECT){
-        int idx=find_table(db,s->table); if(idx<0) return -1;
+        int idx=find_table(db,s->table);
+        if(idx<0){ rsc_debug_unknown_table(db,s,s->table); set_table_error(out,cap,s->table); return -1; }
         Table *t=&db->tables[idx];
+        if(!s->is_star && !s->is_count && !s->is_avg && s->nselect>0){
+            for(int i=0;i<s->nselect;i++){
+                if(find_col(t,s->select_cols[i])<0){ rsc_debug_unknown_column(db,s,s->select_cols[i],"select"); set_col_error(out,cap,s->select_cols[i]); return -1; }
+            }
+        }
+        for(int i=0;i<s->nwhere;i++){
+            if(find_col(t,s->where[i].col)<0){ rsc_debug_unknown_column(db,s,s->where[i].col,"where"); set_col_error(out,cap,s->where[i].col); return -1; }
+        }
+        if(s->has_order){
+            if(find_col(t,s->order_by)<0){ rsc_debug_unknown_column(db,s,s->order_by,"order"); set_col_error(out,cap,s->order_by); return -1; }
+        }
+        if(s->is_avg){
+            if(find_col(t,s->agg_col)<0){ rsc_debug_unknown_column(db,s,s->agg_col,"avg"); set_col_error(out,cap,s->agg_col); return -1; }
+        }
+        if(s->is_count && s->agg_col[0] && rsc_strcmp(s->agg_col,"*")!=0){
+            if(find_col(t,s->agg_col)<0){ rsc_debug_unknown_column(db,s,s->agg_col,"count"); set_col_error(out,cap,s->agg_col); return -1; }
+        }
+        int proj_idx[16]; int proj_n=0;
+        int use_all = s->is_star || (s->nselect==0 && !s->is_count && !s->is_avg);
+        if(use_all){ for(int c=0;c<t->ncols;c++) proj_idx[proj_n++]=c; }
+        else if(!s->is_count && !s->is_avg){ for(int i=0;i<s->nselect;i++) proj_idx[proj_n++]=find_col(t,s->select_cols[i]); }
         ScanCtx ctx; rsc_memset(&ctx,0,sizeof(ctx)); ctx.db=db; ctx.t=t; ctx.st=s; ctx.out=out; ctx.cap=cap; ctx.off=0;
         btree_scan(db->pager,t->root,scan_cb,&ctx);
         // simple order by (bubble)
@@ -198,19 +306,26 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         int lim = s->has_limit? s->limit : ctx.nrows;
         if(lim>ctx.nrows) lim=ctx.nrows;
         int widths[SQL_MAX_COLS]={0};
-        for(int c=0;c<t->ncols;c++) widths[c]=(int)rsc_strlen(t->cols[c].name);
+        for(int pi=0;pi<proj_n;pi++){ int c=proj_idx[pi]; widths[pi]=(int)rsc_strlen(t->cols[c].name); }
         static char cells[256][16][64];
         for(int r=0;r<lim;r++){
             u8 *row=ctx.rows[r];
-            u8 *p=row;
-            for(int c=0;c<t->ncols;c++){
-                char *dst=cells[r][c];
-                if(t->cols[c].type==COL_INT){
-                    i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8);
-                    int pos=0; int neg=0; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) dst[pos++]=rev[k]; dst[pos]=0; p+=8;
-                } else { u16 l=*(u16*)p; if(l>63) l=63; rsc_memcpy(dst,p+2,l); dst[l]=0; p+=2+l; }
-                int cl=(int)rsc_strlen(dst);
-                if(cl>widths[c]) widths[c]=cl;
+            char tmpvals[16][64];
+            {
+                u8 *p=row;
+                for(int c=0;c<t->ncols;c++){
+                    char *dst=tmpvals[c];
+                    if(t->cols[c].type==COL_INT){
+                        i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8);
+                        int pos=0; int neg=0; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) dst[pos++]=rev[k]; dst[pos]=0; p+=8;
+                    } else { u16 l=*(u16*)p; if(l>63) l=63; rsc_memcpy(dst,p+2,l); dst[l]=0; p+=2+l; }
+                }
+            }
+            for(int pi=0;pi<proj_n;pi++){
+                int c=proj_idx[pi];
+                rsc_strcpy(cells[r][pi], tmpvals[c]);
+                int cl=(int)rsc_strlen(cells[r][pi]);
+                if(cl>widths[pi]) widths[pi]=cl;
             }
         }
         usize off=0;
@@ -220,23 +335,24 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         if(lim==0 && ctx.nrows==0){
             OUTS("(empty)\n"); if(off<cap) out[off]=0; else out[cap-1]=0; return 0;
         }
-        for(int c=0;c<t->ncols;c++){ OUTC('+'); for(int k=0;k<widths[c]+2;k++) OUTC('-'); } OUTC('+'); OUTC('\n');
-        for(int c=0;c<t->ncols;c++){
+        for(int pi=0;pi<proj_n;pi++){ OUTC('+'); for(int k=0;k<widths[pi]+2;k++) OUTC('-'); } OUTC('+'); OUTC('\n');
+        for(int pi=0;pi<proj_n;pi++){
+            int c=proj_idx[pi];
             OUTC('|'); OUTC(' ');
             OUTS(t->cols[c].name);
-            for(int k=(int)rsc_strlen(t->cols[c].name);k<widths[c];k++) OUTC(' ');
+            for(int k=(int)rsc_strlen(t->cols[c].name);k<widths[pi];k++) OUTC(' ');
             OUTC(' ');
         } OUTC('|'); OUTC('\n');
-        for(int c=0;c<t->ncols;c++){ OUTC('+'); for(int k=0;k<widths[c]+2;k++) OUTC('-'); } OUTC('+'); OUTC('\n');
+        for(int pi=0;pi<proj_n;pi++){ OUTC('+'); for(int k=0;k<widths[pi]+2;k++) OUTC('-'); } OUTC('+'); OUTC('\n');
         for(int r=0;r<lim;r++){
-            for(int c=0;c<t->ncols;c++){
+            for(int pi=0;pi<proj_n;pi++){
                 OUTC('|'); OUTC(' ');
-                OUTS(cells[r][c]);
-                for(int k=(int)rsc_strlen(cells[r][c]);k<widths[c];k++) OUTC(' ');
+                OUTS(cells[r][pi]);
+                for(int k=(int)rsc_strlen(cells[r][pi]);k<widths[pi];k++) OUTC(' ');
                 OUTC(' ');
             } OUTC('|'); OUTC('\n');
         }
-        for(int c=0;c<t->ncols;c++){ OUTC('+'); for(int k=0;k<widths[c]+2;k++) OUTC('-'); } OUTC('+'); OUTC('\n');
+        for(int pi=0;pi<proj_n;pi++){ OUTC('+'); for(int k=0;k<widths[pi]+2;k++) OUTC('-'); } OUTC('+'); OUTC('\n');
         if(off<cap) out[off]=0; else out[cap-1]=0;
         return 0;
     }
@@ -264,15 +380,54 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         return 0;
     }
     if(s->kind==STMT_UPDATE){
-        int idx=find_table(db,s->table); if(idx<0) return -1;
+        int idx=find_table(db,s->table);
+        if(idx<0){ rsc_debug_unknown_table(db,s,s->table); set_table_error(out,cap,s->table); return -1; }
         Table *t=&db->tables[idx];
         int colidx=-1; for(int i=0;i<t->ncols;i++) if(rsc_strcmp(t->cols[i].name,s->cols[0].name)==0) colidx=i;
-        if(colidx<0) return -1;
+        if(colidx<0){ rsc_debug_unknown_column(db,s,s->cols[0].name,"update"); set_col_error(out,cap,s->cols[0].name); return -1; }
+        for(int i=0;i<s->nwhere;i++) if(find_col(t,s->where[i].col)<0){ rsc_debug_unknown_column(db,s,s->where[i].col,"where"); set_col_error(out,cap,s->where[i].col); return -1; }
+        if(colidx==t->pk_col){
+            const char *newval=s->vals[0];
+            // if more than one row would get same PK -> duplicate
+            // check if new value exists outside matched rows later; quick check: if exists at all and matched rows don't already all have it, fail
+            // full check done after scan; here pre-check for multi-row update
+            (void)newval;
+        }
         // similar scan
         u8 keys[256][8]; u8 rows[256][1024]; u16 rls[256]; int nk=0;
         u64 pn=t->root;
         while(pn){ BNode *n=(BNode*)pager_get(db->pager,pn); if(!n||n->is_leaf) break; if(n->nkeys==0) break; u8 *e=(u8*)n+n->offs[0]; u16 ek=*(u16*)e; pn=*(u64*)(e+2+ek); }
         while(pn&&nk<256){ BNode *n=(BNode*)pager_get(db->pager,pn); if(!n) break; for(int i=0;i<n->nkeys;i++){ u8 *e=(u8*)n+n->offs[i]; u16 kl=*(u16*)e; u16 vl=*(u16*)(e+2); u8 *k=e+4; u8 *v=e+4+kl; int ok=1; for(int w=0;w<s->nwhere;w++) if(!eval_where(t,v,&s->where[w])){ok=0;break;} if(ok){ rsc_memcpy(keys[nk],k,kl); rsc_memcpy(rows[nk],v,vl); rls[nk]=vl; nk++; } } pn=n->next_leaf; }
+        if(colidx==t->pk_col && nk>0){
+            const char *newval=s->vals[0];
+            if(nk>1){
+                extern void rsc_debug_duplicate_pk(Db *db, Stmt *s, const char *val);
+                rsc_debug_duplicate_pk(db,s,newval);
+                set_pk_error(out,cap,newval);
+                return -1;
+            }
+            // nk==1: check if new value differs from current and already exists elsewhere
+            {
+                u8 *cur=rows[0];
+                u8 *cp=cur;
+                for(int k=0;k<colidx;k++){ if(t->cols[k].type==COL_INT) cp+=8; else { u16 l=*(u16*)cp; cp+=2+l; } }
+                int same=0;
+                if(t->cols[colidx].type==COL_INT){
+                    long nv=parse_int_val(newval);
+                    i64 cv=0; for(int k=0;k<8;k++) cv|=(i64)cp[k]<<(k*8);
+                    same=(cv==(i64)nv);
+                } else {
+                    u16 l=*(u16*)cp; usize vl=rsc_strlen(newval);
+                    same=(l==vl && rsc_memcmp(cp+2,newval,l)==0);
+                }
+                if(!same && pk_value_exists(db,t,newval)){
+                    extern void rsc_debug_duplicate_pk(Db *db, Stmt *s, const char *val);
+                    rsc_debug_duplicate_pk(db,s,newval);
+                    set_pk_error(out,cap,newval);
+                    return -1;
+                }
+            }
+        }
         for(int i=0;i<nk;i++){
             // decode row, patch col
             u8 newrow[1024]; rsc_memcpy(newrow,rows[i],rls[i]);
@@ -308,8 +463,16 @@ int db_query(Db *db, const char *sql, RscResult *res){
     rsc_memset(res,0,sizeof(*res));
     Stmt s; if(sql_parse(sql,&s)!=0) return -1;
     if(s.kind!=STMT_SELECT) return -1;
-    int idx=find_table(db,s.table); if(idx<0) return -1;
+    int idx=find_table(db,s.table);
+    if(idx<0){ rsc_debug_unknown_table(db,&s,s.table); return -1; }
     Table *t=&db->tables[idx];
+    if(!s.is_star && !s.is_count && !s.is_avg && s.nselect>0){
+        for(int i=0;i<s.nselect;i++) if(find_col(t,s.select_cols[i])<0){ rsc_debug_unknown_column(db,&s,s.select_cols[i],"select"); return -1; }
+    }
+    for(int i=0;i<s.nwhere;i++) if(find_col(t,s.where[i].col)<0){ rsc_debug_unknown_column(db,&s,s.where[i].col,"where"); return -1; }
+    if(s.has_order) if(find_col(t,s.order_by)<0){ rsc_debug_unknown_column(db,&s,s.order_by,"order"); return -1; }
+    if(s.is_avg) if(find_col(t,s.agg_col)<0){ rsc_debug_unknown_column(db,&s,s.agg_col,"avg"); return -1; }
+    if(s.is_count && s.agg_col[0] && rsc_strcmp(s.agg_col,"*")!=0) if(find_col(t,s.agg_col)<0){ rsc_debug_unknown_column(db,&s,s.agg_col,"count"); return -1; }
     ScanCtx ctx; rsc_memset(&ctx,0,sizeof(ctx)); ctx.db=db; ctx.t=t; ctx.st=&s;
     btree_scan(db->pager,t->root,scan_cb,&ctx);
     if(s.has_order){
@@ -346,19 +509,27 @@ int db_query(Db *db, const char *sql, RscResult *res){
         rsc_strcpy(res->cells[0][0],val);
         return 0;
     }
-    res->ncols=t->ncols;
-    for(int c=0;c<t->ncols;c++) rsc_strcpy(res->cols[c],t->cols[c].name);
+    int proj_idx[16]; int proj_n=0;
+    int use_all = s.is_star || (s.nselect==0 && !s.is_count && !s.is_avg);
+    if(use_all){ for(int c=0;c<t->ncols;c++) proj_idx[proj_n++]=c; }
+    else { for(int i=0;i<s.nselect;i++) proj_idx[proj_n++]=find_col(t,s.select_cols[i]); }
+    res->ncols=proj_n;
+    for(int pi=0;pi<proj_n;pi++) rsc_strcpy(res->cols[pi],t->cols[proj_idx[pi]].name);
     res->nrows=lim;
     for(int r=0;r<lim;r++){
         u8 *row=ctx.rows[r];
-        u8 *p=row;
-        for(int c=0;c<t->ncols;c++){
-            char *dst=res->cells[r][c];
-            if(t->cols[c].type==COL_INT){
-                i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8);
-                int pos=0; int neg=0; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) dst[pos++]=rev[k]; dst[pos]=0; p+=8;
-            } else { u16 l=*(u16*)p; if(l>63) l=63; rsc_memcpy(dst,p+2,l); dst[l]=0; p+=2+l; }
+        char tmpvals[16][64];
+        {
+            u8 *p=row;
+            for(int c=0;c<t->ncols;c++){
+                char *dst=tmpvals[c];
+                if(t->cols[c].type==COL_INT){
+                    i64 v=0; for(int k=0;k<8;k++) v|=(i64)p[k]<<(k*8);
+                    int pos=0; int neg=0; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) dst[pos++]=rev[k]; dst[pos]=0; p+=8;
+                } else { u16 l=*(u16*)p; if(l>63) l=63; rsc_memcpy(dst,p+2,l); dst[l]=0; p+=2+l; }
+            }
         }
+        for(int pi=0;pi<proj_n;pi++) rsc_strcpy(res->cells[r][pi], tmpvals[proj_idx[pi]]);
     }
     return 0;
 }

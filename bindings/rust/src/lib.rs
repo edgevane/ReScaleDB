@@ -13,7 +13,7 @@ struct Pager {
 #[repr(C)]
 struct Db {
     pager: *mut Pager,
-    _opaque: [u8; 11000],
+    _opaque: [u8; 11500],
 }
 
 #[repr(C)]
@@ -30,6 +30,7 @@ extern "C" {
     fn db_close(db: *mut Db) -> i32;
     fn db_exec(db: *mut Db, sql: *const c_char, out: *mut c_char, cap: usize) -> i32;
     fn db_query(db: *mut Db, sql: *const c_char, res: *mut RscResult) -> i32;
+    fn rsc_enable_debug(on: i32);
 }
 
 pub struct QueryResult {
@@ -114,6 +115,10 @@ impl Database {
 
     pub fn query_raw(&mut self, sql: &str) -> Result<String, String> {
         self.exec(sql)
+    }
+
+    pub fn enable_debug(&self, on: bool) {
+        unsafe { rsc_enable_debug(if on { 1 } else { 0 }) }
     }
 }
 
