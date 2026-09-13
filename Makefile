@@ -77,7 +77,7 @@ out/aarch64.so:
 out/multiarch.jar: out/x86_64.so out/aarch64.so
 	cd bindings/java && gradle -q build
 	mkdir -p out
-	cp bindings/java/build/libs/*.jar out/multiarch.jar
+	MAIN_JAR=$$(ls bindings/java/build/libs/*.jar | grep -v -e '-sources\.jar' -e '-javadoc\.jar' | head -n 1); cp "$$MAIN_JAR" out/multiarch.jar
 
 rust:
 	cargo build --manifest-path bindings/rust/Cargo.toml
