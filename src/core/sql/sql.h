@@ -21,6 +21,7 @@ typedef struct {
     char idx_name[32]; char idx_col[32];
     int is_count;
     int is_avg;
+    int is_distinct;
     char agg_col[32];
     char select_cols[16][32]; int nselect; int is_star;
     char orig_sql[256];

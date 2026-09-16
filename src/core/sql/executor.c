@@ -409,8 +409,41 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
                 int v=cnt;
                 if(s->agg_col[0] && rsc_strcmp(s->agg_col,"*")!=0){
                     int cc=find_col(t,s->agg_col);
-                    v=0;
-                    for(int r=0;r<cnt;r++) if(!row_is_null(t,ctx.rows[r],cc)) v++;
+                    if(s->is_distinct){
+                        char seen[256][64]; int nseen=0;
+                        for(int r=0;r<cnt;r++){
+                            if(row_is_null(t,ctx.rows[r],cc)) continue;
+                            char cb[64]={0}; row_cell_str(t,ctx.rows[r],cc,cb,0);
+                            int dup=0;
+                            for(int k=0;k<nseen;k++) if(rsc_strcmp(seen[k],cb)==0){ dup=1; break; }
+                            if(!dup && nseen<256){ rsc_strcpy(seen[nseen++],cb); }
+                        }
+                        v=nseen;
+                    } else {
+                        v=0;
+                        for(int r=0;r<cnt;r++) if(!row_is_null(t,ctx.rows[r],cc)) v++;
+                    }
+                } else if(s->is_distinct){
+                    // COUNT(DISTINCT *) -> distinct rows
+                    char seen[256][16][64]; int seen_null[256][16]; int nseen=0;
+                    for(int r=0;r<cnt;r++){
+                        char tv[16][64]; int tn[16]={0};
+                        decode_row_all(t,ctx.rows[r],tv,tn);
+                        int dup=0;
+                        for(int k=0;k<nseen;k++){
+                            int eq=1;
+                            for(int c=0;c<t->ncols;c++){
+                                if(tn[c]!=seen_null[k][c]){ eq=0; break; }
+                                if(!tn[c] && rsc_strcmp(tv[c],seen[k][c])!=0){ eq=0; break; }
+                            }
+                            if(eq){ dup=1; break; }
+                        }
+                        if(!dup && nseen<256){
+                            for(int c=0;c<t->ncols;c++){ rsc_strcpy(seen[nseen][c],tv[c]); seen_null[nseen][c]=tn[c]; }
+                            nseen++;
+                        }
+                    }
+                    v=nseen;
                 }
                 char hdr2[64]="COUNT"; char val[32]; int pos=0; char rev[16]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
                 int w=(int)rsc_strlen(hdr2); int wl=(int)rsc_strlen(val); if(wl>w) w=wl;
@@ -426,9 +459,16 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
                 if(cidx<0) return -1;
                 if(t->cols[cidx].type!=COL_INT) return -1;
                 i64 sum=0; int n=0;
+                char seen[256][64]; int nseen=0;
                 for(int r=0;r<cnt;r++){
                     if(row_is_null(t,ctx.rows[r],cidx)) continue;
                     char cb[64]={0}; row_cell_str(t,ctx.rows[r],cidx,cb,0);
+                    if(s->is_distinct){
+                        int dup=0;
+                        for(int k=0;k<nseen;k++) if(rsc_strcmp(seen[k],cb)==0){ dup=1; break; }
+                        if(dup) continue;
+                        if(nseen<256) rsc_strcpy(seen[nseen++],cb);
+                    }
                     sum+=parse_int_val(cb); n++;
                 }
                 char hdr2[64]; rsc_strcpy(hdr2,"AVG("); rsc_strcpy(hdr2+4,s->agg_col); rsc_strcpy(hdr2+4+rsc_strlen(s->agg_col),")");
@@ -447,12 +487,12 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
                 if(off<cap) out[off]=0; else out[cap-1]=0; return 0;
             }
         }
-        int lim = s->has_limit? s->limit : ctx.nrows;
-        if(lim>ctx.nrows) lim=ctx.nrows;
+        int nrows_all=ctx.nrows;
+        if(nrows_all>256) nrows_all=256;
         int widths[SQL_MAX_COLS]={0};
         for(int pi=0;pi<proj_n;pi++){ int c=proj_idx[pi]; widths[pi]=(int)rsc_strlen(t->cols[c].name); }
         static char cells[256][16][64];
-        for(int r=0;r<lim;r++){
+        for(int r=0;r<nrows_all;r++){
             u8 *row=ctx.rows[r];
             char tmpvals[16][64]; int tmpnull[16]={0};
             decode_row_all(t,row,tmpvals,tmpnull);
@@ -464,11 +504,30 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
                 if(cl>widths[pi]) widths[pi]=cl;
             }
         }
+        int nout=nrows_all;
+        if(s->is_distinct && !s->is_count && !s->is_avg){
+            int w=0;
+            for(int r=0;r<nout;r++){
+                int dup=0;
+                for(int k=0;k<w;k++){
+                    int eq=1;
+                    for(int pi=0;pi<proj_n;pi++) if(rsc_strcmp(cells[r][pi],cells[k][pi])!=0){ eq=0; break; }
+                    if(eq){ dup=1; break; }
+                }
+                if(!dup){
+                    if(w!=r) for(int pi=0;pi<proj_n;pi++) rsc_strcpy(cells[w][pi],cells[r][pi]);
+                    w++;
+                }
+            }
+            nout=w;
+        }
+        int lim = s->has_limit? s->limit : nout;
+        if(lim>nout) lim=nout;
         usize off=0;
         #define OUTC(c) do{ if(off+1<cap) out[off++]=c; }while(0)
         #define OUTS(s) do{ usize _l=rsc_strlen(s); if(off+_l<cap){ rsc_memcpy(out+off,s,_l); off+=_l; } }while(0)
         #define OUTN(s,n) do{ if(off+(n)<cap){ rsc_memcpy(out+off,s,n); off+=n; } }while(0)
-        if(lim==0 && ctx.nrows==0){
+        if(lim==0 && nout==0){
             OUTS("(empty)\n"); if(off<cap) out[off]=0; else out[cap-1]=0; return 0;
         }
         for(int pi=0;pi<proj_n;pi++){ OUTC('+'); for(int k=0;k<widths[pi]+2;k++) OUTC('-'); } OUTC('+'); OUTC('\n');
@@ -655,14 +714,46 @@ int db_query(Db *db, const char *sql, RscResult *res){
             }
         }
     }
-    int lim=s.has_limit? s.limit : ctx.nrows;
-    if(lim>ctx.nrows) lim=ctx.nrows;
+    int nrows_all=ctx.nrows;
+    if(nrows_all>256) nrows_all=256;
     if(s.is_count){
-        int v=ctx.nrows;
+        int v=nrows_all;
         if(s.agg_col[0] && rsc_strcmp(s.agg_col,"*")!=0){
             int cc=find_col(t,s.agg_col);
-            v=0;
-            for(int r=0;r<ctx.nrows;r++) if(!row_is_null(t,ctx.rows[r],cc)) v++;
+            if(s.is_distinct){
+                char seen[256][64]; int nseen=0;
+                for(int r=0;r<nrows_all;r++){
+                    if(row_is_null(t,ctx.rows[r],cc)) continue;
+                    char cb[64]={0}; row_cell_str(t,ctx.rows[r],cc,cb,0);
+                    int dup=0;
+                    for(int k=0;k<nseen;k++) if(rsc_strcmp(seen[k],cb)==0){ dup=1; break; }
+                    if(!dup && nseen<256) rsc_strcpy(seen[nseen++],cb);
+                }
+                v=nseen;
+            } else {
+                v=0;
+                for(int r=0;r<nrows_all;r++) if(!row_is_null(t,ctx.rows[r],cc)) v++;
+            }
+        } else if(s.is_distinct){
+            char seen[256][16][64]; int seen_null[256][16]; int nseen=0;
+            for(int r=0;r<nrows_all;r++){
+                char tv[16][64]; int tn[16]={0};
+                decode_row_all(t,ctx.rows[r],tv,tn);
+                int dup=0;
+                for(int k=0;k<nseen;k++){
+                    int eq=1;
+                    for(int c=0;c<t->ncols;c++){
+                        if(tn[c]!=seen_null[k][c]){ eq=0; break; }
+                        if(!tn[c] && rsc_strcmp(tv[c],seen[k][c])!=0){ eq=0; break; }
+                    }
+                    if(eq){ dup=1; break; }
+                }
+                if(!dup && nseen<256){
+                    for(int c=0;c<t->ncols;c++){ rsc_strcpy(seen[nseen][c],tv[c]); seen_null[nseen][c]=tn[c]; }
+                    nseen++;
+                }
+            }
+            v=nseen;
         }
         res->ncols=1; rsc_strcpy(res->cols[0],"COUNT");
         res->nrows=1;
@@ -674,9 +765,16 @@ int db_query(Db *db, const char *sql, RscResult *res){
         int cidx=-1; for(int c=0;c<t->ncols;c++) if(rsc_strcmp(t->cols[c].name,s.agg_col)==0) cidx=c;
         if(cidx<0) return -1;
         i64 sum=0; int n=0;
-        for(int r=0;r<ctx.nrows;r++){
+        char seen[256][64]; int nseen=0;
+        for(int r=0;r<nrows_all;r++){
             if(row_is_null(t,ctx.rows[r],cidx)) continue;
             char cb[64]={0}; row_cell_str(t,ctx.rows[r],cidx,cb,0);
+            if(s.is_distinct){
+                int dup=0;
+                for(int k=0;k<nseen;k++) if(rsc_strcmp(seen[k],cb)==0){ dup=1; break; }
+                if(dup) continue;
+                if(nseen<256) rsc_strcpy(seen[nseen++],cb);
+            }
             sum+=parse_int_val(cb); n++;
         }
         res->ncols=1; rsc_strcpy(res->cols[0],"AVG("); rsc_strcpy(res->cols[0]+4,s.agg_col); res->cols[0][4+rsc_strlen(s.agg_col)]=')'; res->cols[0][5+rsc_strlen(s.agg_col)]=0;
@@ -693,16 +791,37 @@ int db_query(Db *db, const char *sql, RscResult *res){
     else { for(int i=0;i<s.nselect;i++) proj_idx[proj_n++]=find_col(t,s.select_cols[i]); }
     res->ncols=proj_n;
     for(int pi=0;pi<proj_n;pi++) rsc_strcpy(res->cols[pi],t->cols[proj_idx[pi]].name);
-    res->nrows=lim;
-    for(int r=0;r<lim;r++){
+    static char qcells[256][16][64];
+    for(int r=0;r<nrows_all;r++){
         u8 *row=ctx.rows[r];
         char tmpvals[16][64]; int tmpnull[16]={0};
         decode_row_all(t,row,tmpvals,tmpnull);
         for(int pi=0;pi<proj_n;pi++){
             int c=proj_idx[pi];
-            if(tmpnull[c]) rsc_strcpy(res->cells[r][pi], "NULL");
-            else rsc_strcpy(res->cells[r][pi], tmpvals[c]);
+            if(tmpnull[c]) rsc_strcpy(qcells[r][pi], "NULL");
+            else rsc_strcpy(qcells[r][pi], tmpvals[c]);
         }
     }
+    int nout=nrows_all;
+    if(s.is_distinct){
+        int w=0;
+        for(int r=0;r<nout;r++){
+            int dup=0;
+            for(int k=0;k<w;k++){
+                int eq=1;
+                for(int pi=0;pi<proj_n;pi++) if(rsc_strcmp(qcells[r][pi],qcells[k][pi])!=0){ eq=0; break; }
+                if(eq){ dup=1; break; }
+            }
+            if(!dup){
+                if(w!=r) for(int pi=0;pi<proj_n;pi++) rsc_strcpy(qcells[w][pi],qcells[r][pi]);
+                w++;
+            }
+        }
+        nout=w;
+    }
+    int lim=s.has_limit? s.limit : nout;
+    if(lim>nout) lim=nout;
+    res->nrows=lim;
+    for(int r=0;r<lim;r++) for(int pi=0;pi<proj_n;pi++) rsc_strcpy(res->cells[r][pi], qcells[r][pi]);
     return 0;
 }

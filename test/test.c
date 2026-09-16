@@ -40,6 +40,25 @@ int main(){
     ASSERT(strstr(out,"2")!=0,"count skips nulls");
     ASSERT(db_exec(&m,"UPDATE u SET email = NULL WHERE id = 1",out,sizeof(out))!=0,"update to null rejected");
     db_close(&m);
+    Db d; db_init(&d);
+    ASSERT(db_exec(&d,"CREATE TABLE t (a INT, b TEXT)",out,sizeof(out))==0,"distinct create");
+    ASSERT(db_exec(&d,"INSERT INTO t VALUES (1, 'x')",out,sizeof(out))==0,"distinct i1");
+    ASSERT(db_exec(&d,"INSERT INTO t VALUES (1, 'x')",out,sizeof(out))==0,"distinct i2");
+    ASSERT(db_exec(&d,"INSERT INTO t VALUES (2, NULL)",out,sizeof(out))==0,"distinct i3");
+    db_exec(&d,"SELECT DISTINCT a FROM t",out,sizeof(out));
+    ASSERT(strstr(out,"1")!=0 && strstr(out,"2")!=0,"distinct rows");
+    db_exec(&d,"SELECT DISTINCT b FROM t",out,sizeof(out));
+    ASSERT(strstr(out,"x")!=0 && strstr(out,"NULL")!=0,"distinct null shown");
+    db_exec(&d,"SELECT COUNT(DISTINCT a) FROM t",out,sizeof(out));
+    ASSERT(strstr(out,"2")!=0,"count distinct skips null");
+    db_exec(&d,"SELECT AVG(DISTINCT a) FROM t",out,sizeof(out));
+    ASSERT(strstr(out,"1")!=0,"avg distinct");
+    {
+        RscResult rr; rsc_memset(&rr,0,sizeof(rr));
+        ASSERT(db_query(&d,"SELECT DISTINCT b FROM t",&rr)==0,"distinct query");
+        ASSERT(rr.nrows==2,"distinct query rows");
+    }
+    db_close(&d);
     // btree direct isolated
     Pager p2; pager_open(&p2,"/tmp/bt_test.rsc.db");
     u64 root=0; btree_create(&p2,&root);

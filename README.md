@@ -11,6 +11,7 @@ Fast embedded SQL database for Linux. Core is freestanding (no libc), mmap-backe
 - `UNIQUE`: enforced like PK but allows multiple `NULL`s
 - `NULL` literal, `NOT NULL` enforcement, `DEFAULT val` / `DEFAULT NULL` (use `DEFAULT` keyword in `INSERT`/`UPDATE`)
 - Aggregates skip `NULL`s: `COUNT(col)` counts non-null, `AVG(col)` averages non-null (`NULL` if none)
+- `DISTINCT`: `SELECT DISTINCT a, b`, `SELECT DISTINCT *`, `COUNT(DISTINCT col)`, `AVG(DISTINCT col)`
 - REPL shows tables, code gets structured results
 - Non-libc core (`src/libs` + `src/arch`), `arch/` only place with syscalls
 - Linux x86_64 and aarch64, GCC freestanding (`-nostdlib -ffreestanding`)
@@ -84,9 +85,13 @@ SELECT * FROM users WHERE id > 1 AND name = 'bob' ORDER BY id LIMIT 10;
 SELECT * FROM users WHERE nick IS NULL;
 SELECT * FROM users WHERE age IS NOT NULL;
 SELECT * FROM users WHERE name != 'Ann';
+SELECT DISTINCT nick FROM users;
+SELECT DISTINCT * FROM users WHERE age > 18 ORDER BY nick LIMIT 10;
 SELECT COUNT(*) FROM users;
 SELECT COUNT(nick) FROM users;   -- counts non-null only
+SELECT COUNT(DISTINCT nick) FROM users;
 SELECT AVG(age) FROM users;      -- ignores NULL, NULL if none
+SELECT AVG(DISTINCT age) FROM users;
 
 UPDATE users SET nick = NULL WHERE id = 1;
 UPDATE users SET age = DEFAULT WHERE id = 1;
