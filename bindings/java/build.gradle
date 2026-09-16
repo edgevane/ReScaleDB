@@ -1,7 +1,6 @@
 plugins {
     id 'java-library'
     id 'maven-publish'
-    id 'signing'
 }
 
 group = 'dev.aplominski'
@@ -71,23 +70,14 @@ publishing {
         }
 
         maven {
-            name = 'central'
-            url = 'https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/'
-
+            name = 'GitHubPackages'
+            url = uri('https://maven.pkg.github.com/edgevane/ReScaleDB')
             credentials {
-                username = System.getenv('MAVEN_USERNAME')
-                password = System.getenv('MAVEN_PASSWORD')
+                username = System.getenv('GITHUB_ACTOR')
+                password = System.getenv('GITHUB_TOKEN')
             }
         }
     }
-}
-
-signing {
-    def signingKey = System.getenv('SIGNING_KEY')
-    def signingPassword = System.getenv('SIGNING_PASSWORD')
-
-    useInMemoryPgpKeys(signingKey, signingPassword)
-    sign publishing.publications.maven
 }
 
 def javaHome = System.getenv('JAVA_HOME') ?: '/usr/lib/jvm/java-26-openjdk'
