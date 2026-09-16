@@ -51,8 +51,17 @@ int main(){
     ASSERT(strstr(out,"x")!=0 && strstr(out,"NULL")!=0,"distinct null shown");
     db_exec(&d,"SELECT COUNT(DISTINCT a) FROM t",out,sizeof(out));
     ASSERT(strstr(out,"2")!=0,"count distinct skips null");
+    db_exec(&d,"SELECT COUNT() FROM t",out,sizeof(out));
+    ASSERT(strstr(out,"3")!=0,"bare count counts rows");
     db_exec(&d,"SELECT AVG(DISTINCT a) FROM t",out,sizeof(out));
     ASSERT(strstr(out,"1")!=0,"avg distinct");
+    db_exec(&d,"SELECT SUM(a) FROM t",out,sizeof(out));
+    ASSERT(strstr(out,"4")!=0,"sum skips null");
+    db_exec(&d,"SELECT SUM(DISTINCT a) FROM t",out,sizeof(out));
+    ASSERT(strstr(out,"3")!=0,"sum distinct");
+    ASSERT(db_exec(&d,"SELECT SUM(a) FROM t WHERE a > 100",out,sizeof(out))==0,"sum empty set");
+    ASSERT(strstr(out,"NULL")!=0,"sum empty is null");
+    ASSERT(db_exec(&d,"SELECT SUM(b) FROM t",out,sizeof(out))!=0,"sum text rejected");
     ASSERT(db_exec(&d,"CREATE TABLE m (a INT, b TEXT)",out,sizeof(out))==0,"minmax create");
     ASSERT(db_exec(&d,"INSERT INTO m VALUES (3, 'pear')",out,sizeof(out))==0,"minmax i1");
     ASSERT(db_exec(&d,"INSERT INTO m VALUES (NULL, 'apple')",out,sizeof(out))==0,"minmax i2");
@@ -79,6 +88,11 @@ int main(){
         RscResult rr3; rsc_memset(&rr3,0,sizeof(rr3));
         ASSERT(db_query(&d,"SELECT MAX(b) FROM m",&rr3)==0,"max text query");
         ASSERT(rr3.nrows==1 && strcmp(rr3.cells[0][0],"pear")==0,"max text query value");
+    }
+    {
+        RscResult rr4; rsc_memset(&rr4,0,sizeof(rr4));
+        ASSERT(db_query(&d,"SELECT SUM(a) FROM m",&rr4)==0,"sum query");
+        ASSERT(rr4.nrows==1 && strcmp(rr4.cells[0][0],"-2")==0,"sum query value");
     }
     {
         RscResult rr; rsc_memset(&rr,0,sizeof(rr));

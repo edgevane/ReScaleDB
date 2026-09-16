@@ -361,16 +361,22 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         if(s->has_order){
             if(find_col(t,s->order_by)<0){ rsc_debug_unknown_column(db,s,s->order_by,"order"); set_col_error(out,cap,s->order_by); return -1; }
         }
-        if(s->is_avg || s->is_max || s->is_min){
+        if(s->is_avg){
             if(find_col(t,s->agg_col)<0){ rsc_debug_unknown_column(db,s,s->agg_col,"avg"); set_col_error(out,cap,s->agg_col); return -1; }
+        }
+        if(s->is_sum){
+            if(find_col(t,s->agg_col)<0){ rsc_debug_unknown_column(db,s,s->agg_col,"sum"); set_col_error(out,cap,s->agg_col); return -1; }
+        }
+        if(s->is_max || s->is_min){
+            if(find_col(t,s->agg_col)<0){ rsc_debug_unknown_column(db,s,s->agg_col,s->is_max?"max":"min"); set_col_error(out,cap,s->agg_col); return -1; }
         }
         if(s->is_count && s->agg_col[0] && rsc_strcmp(s->agg_col,"*")!=0){
             if(find_col(t,s->agg_col)<0){ rsc_debug_unknown_column(db,s,s->agg_col,"count"); set_col_error(out,cap,s->agg_col); return -1; }
         }
         int proj_idx[16]; int proj_n=0;
-        int use_all = s->is_star || (s->nselect==0 && !s->is_count && !s->is_avg && !s->is_max && !s->is_min);
+        int use_all = s->is_star || (s->nselect==0 && !s->is_count && !s->is_avg && !s->is_sum && !s->is_max && !s->is_min);
         if(use_all){ for(int c=0;c<t->ncols;c++) proj_idx[proj_n++]=c; }
-        else if(!s->is_count && !s->is_avg && !s->is_max && !s->is_min){ for(int i=0;i<s->nselect;i++) proj_idx[proj_n++]=find_col(t,s->select_cols[i]); }
+        else if(!s->is_count && !s->is_avg && !s->is_sum && !s->is_max && !s->is_min){ for(int i=0;i<s->nselect;i++) proj_idx[proj_n++]=find_col(t,s->select_cols[i]); }
         ScanCtx ctx; rsc_memset(&ctx,0,sizeof(ctx)); ctx.db=db; ctx.t=t; ctx.st=s; ctx.out=out; ctx.cap=cap; ctx.off=0;
         btree_scan(db->pager,t->root,scan_cb,&ctx);
         // simple order by (bubble, NULLs last)
@@ -400,7 +406,7 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
                 }
             }
         }
-        if(s->is_count || s->is_avg || s->is_max || s->is_min){
+        if(s->is_count || s->is_avg || s->is_sum || s->is_max || s->is_min){
             int cnt=ctx.nrows;
             usize off=0;
             #define OUTC2(c) do{ if(off+1<cap) out[off++]=c; }while(0)
@@ -486,6 +492,37 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
                 for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
                 if(off<cap) out[off]=0; else out[cap-1]=0; return 0;
             }
+            if(s->is_sum){
+                int cidx=-1; for(int c=0;c<t->ncols;c++) if(rsc_strcmp(t->cols[c].name,s->agg_col)==0) cidx=c;
+                if(cidx<0) return -1;
+                if(t->cols[cidx].type!=COL_INT) return -1;
+                i64 sum=0; int n=0;
+                char seen[256][64]; int nseen=0;
+                for(int r=0;r<cnt;r++){
+                    if(row_is_null(t,ctx.rows[r],cidx)) continue;
+                    char cb[64]={0}; row_cell_str(t,ctx.rows[r],cidx,cb,0);
+                    if(s->is_distinct){
+                        int dup=0;
+                        for(int k=0;k<nseen;k++) if(rsc_strcmp(seen[k],cb)==0){ dup=1; break; }
+                        if(dup) continue;
+                        if(nseen<256) rsc_strcpy(seen[nseen++],cb);
+                    }
+                    sum+=parse_int_val(cb); n++;
+                }
+                char hdr2[64]; rsc_strcpy(hdr2,"SUM("); rsc_strcpy(hdr2+4,s->agg_col); rsc_strcpy(hdr2+4+rsc_strlen(s->agg_col),")");
+                char val[32];
+                if(n==0){ rsc_strcpy(val,"NULL"); }
+                else {
+                    int pos=0; int neg=0; i64 v=sum; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
+                }
+                int w=(int)rsc_strlen(hdr2); int wl=(int)rsc_strlen(val); if(wl>w) w=wl;
+                for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
+                OUTS2(hdr2); OUTC2('\n');
+                for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
+                OUTS2(val); OUTC2('\n');
+                for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
+                if(off<cap) out[off]=0; else out[cap-1]=0; return 0;
+            }
             if(s->is_max || s->is_min){
                 int cidx=-1; for(int c=0;c<t->ncols;c++) if(rsc_strcmp(t->cols[c].name,s->agg_col)==0) cidx=c;
                 if(cidx<0) return -1;
@@ -541,7 +578,7 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
             }
         }
         int nout=nrows_all;
-        if(s->is_distinct && !s->is_count && !s->is_avg && !s->is_max && !s->is_min){
+        if(s->is_distinct && !s->is_count && !s->is_avg && !s->is_sum && !s->is_max && !s->is_min){
             int w=0;
             for(int r=0;r<nout;r++){
                 int dup=0;
@@ -715,12 +752,14 @@ int db_query(Db *db, const char *sql, RscResult *res){
     int idx=find_table(db,s.table);
     if(idx<0){ rsc_debug_unknown_table(db,&s,s.table); return -1; }
     Table *t=&db->tables[idx];
-    if(!s.is_star && !s.is_count && !s.is_avg && s.nselect>0){
+    if(!s.is_star && !s.is_count && !s.is_avg && !s.is_sum && !s.is_max && !s.is_min && s.nselect>0){
         for(int i=0;i<s.nselect;i++) if(find_col(t,s.select_cols[i])<0){ rsc_debug_unknown_column(db,&s,s.select_cols[i],"select"); return -1; }
     }
     for(int i=0;i<s.nwhere;i++) if(find_col(t,s.where[i].col)<0){ rsc_debug_unknown_column(db,&s,s.where[i].col,"where"); return -1; }
     if(s.has_order) if(find_col(t,s.order_by)<0){ rsc_debug_unknown_column(db,&s,s.order_by,"order"); return -1; }
     if(s.is_avg) if(find_col(t,s.agg_col)<0){ rsc_debug_unknown_column(db,&s,s.agg_col,"avg"); return -1; }
+    if(s.is_sum) if(find_col(t,s.agg_col)<0){ rsc_debug_unknown_column(db,&s,s.agg_col,"sum"); return -1; }
+    if(s.is_max || s.is_min) if(find_col(t,s.agg_col)<0){ rsc_debug_unknown_column(db,&s,s.agg_col,s.is_max?"max":"min"); return -1; }
     if(s.is_count && s.agg_col[0] && rsc_strcmp(s.agg_col,"*")!=0) if(find_col(t,s.agg_col)<0){ rsc_debug_unknown_column(db,&s,s.agg_col,"count"); return -1; }
     ScanCtx ctx; rsc_memset(&ctx,0,sizeof(ctx)); ctx.db=db; ctx.t=t; ctx.st=&s;
     btree_scan(db->pager,t->root,scan_cb,&ctx);
@@ -821,6 +860,30 @@ int db_query(Db *db, const char *sql, RscResult *res){
         rsc_strcpy(res->cells[0][0],val);
         return 0;
     }
+    if(s.is_sum){
+        int cidx=-1; for(int c=0;c<t->ncols;c++) if(rsc_strcmp(t->cols[c].name,s.agg_col)==0) cidx=c;
+        if(cidx<0) return -1;
+        if(t->cols[cidx].type!=COL_INT) return -1;
+        i64 sum=0; int n=0;
+        char seen[256][64]; int nseen=0;
+        for(int r=0;r<nrows_all;r++){
+            if(row_is_null(t,ctx.rows[r],cidx)) continue;
+            char cb[64]={0}; row_cell_str(t,ctx.rows[r],cidx,cb,0);
+            if(s.is_distinct){
+                int dup=0;
+                for(int k=0;k<nseen;k++) if(rsc_strcmp(seen[k],cb)==0){ dup=1; break; }
+                if(dup) continue;
+                if(nseen<256) rsc_strcpy(seen[nseen++],cb);
+            }
+            sum+=parse_int_val(cb); n++;
+        }
+        res->ncols=1; rsc_strcpy(res->cols[0],"SUM("); rsc_strcpy(res->cols[0]+4,s.agg_col); res->cols[0][4+rsc_strlen(s.agg_col)]=')'; res->cols[0][5+rsc_strlen(s.agg_col)]=0;
+        res->nrows=1;
+        if(n==0){ rsc_strcpy(res->cells[0][0],"NULL"); return 0; }
+        char val[32]; int pos=0; int neg=0; i64 v=sum; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
+        rsc_strcpy(res->cells[0][0],val);
+        return 0;
+    }
     if(s.is_max || s.is_min){
         int cidx=-1; for(int c=0;c<t->ncols;c++) if(rsc_strcmp(t->cols[c].name,s.agg_col)==0) cidx=c;
         if(cidx<0) return -1;
@@ -851,7 +914,7 @@ int db_query(Db *db, const char *sql, RscResult *res){
         return 0;
     }
     int proj_idx[16]; int proj_n=0;
-    int use_all = s.is_star || (s.nselect==0 && !s.is_count && !s.is_avg && !s.is_max && !s.is_min);
+    int use_all = s.is_star || (s.nselect==0 && !s.is_count && !s.is_avg && !s.is_sum && !s.is_max && !s.is_min);
     if(use_all){ for(int c=0;c<t->ncols;c++) proj_idx[proj_n++]=c; }
     else { for(int i=0;i<s.nselect;i++) proj_idx[proj_n++]=find_col(t,s.select_cols[i]); }
     res->ncols=proj_n;

@@ -13,7 +13,7 @@ DUMP ALL TO 'state.dump';
 ## Features
 
 - In-memory `mmap(ANON)` + B+Tree (order 64, 4KB pages, copy-on-write), MVCC single-writer / multi-reader
-- SQL: `PRIMARY KEY` / `UNIQUE` / `NOT NULL` / `DEFAULT`, `NULL`, `DISTINCT`, `WHERE` (`= != <> < > <= >=`, `IS NULL`), `ORDER BY`, `LIMIT`, `COUNT` / `AVG` / `MIN` / `MAX` (skip `NULL`s)
+- SQL: `PRIMARY KEY` / `UNIQUE` / `NOT NULL` / `DEFAULT`, `NULL`, `DISTINCT`, `WHERE` (`= != <> < > <= >=`, `IS NULL`), `ORDER BY`, `LIMIT`, `COUNT` / `AVG` / `SUM` / `MIN` / `MAX` (skip `NULL`s)
 - REPL prints tables, code gets structured results (`db_query`)
 - Non-libc core (`src/libs` + `src/arch`), Linux x86_64 and aarch64, GCC freestanding
 - Bindings: Rust (`bindings/rust`), Java (`bindings/java`, multiarch jar)

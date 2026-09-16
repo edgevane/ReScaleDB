@@ -21,6 +21,7 @@ typedef struct {
     char idx_name[32]; char idx_col[32];
     int is_count;
     int is_avg;
+    int is_sum;
     int is_max;
     int is_min;
     int is_distinct;

@@ -53,9 +53,9 @@ if (db_query(&db, "SELECT id, name FROM t WHERE id > 0 ORDER BY id;", &r) == 0) 
 }
 ```
 
-`NULL` cells come back as the string `"NULL"`. `COUNT`/`AVG`/`MAX`/`MIN`
-return a single cell (`"NULL"` for `AVG`/`MAX`/`MIN` over no non-null rows).
-At most 256 rows are returned; add `LIMIT` to page through larger tables.
+`NULL` cells come back as the string `"NULL"`. `COUNT`/`AVG`/`SUM`/`MAX`/`MIN`
+return a single cell (`"NULL"` for `AVG`/`SUM`/`MAX`/`MIN` over no non-null
+rows). At most 256 rows are returned; add `LIMIT` to page through larger tables.
 
 ## Complete example
 

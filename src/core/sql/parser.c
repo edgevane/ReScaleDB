@@ -7,6 +7,32 @@ static int eqi(const char *a,const char *b){
 }
 static void trim(char *s){ char *p=s; while(rsc_isspace(*p)) p++; if(p!=s) rsc_memmove(s,p,rsc_strlen(p)+1); usize n=rsc_strlen(s); while(n&&rsc_isspace(s[n-1])) s[--n]=0; }
 static const char *skip_sp(const char *p){ while(rsc_isspace(*p)) p++; return p; }
+// Parse the ([DISTINCT] col) part of AVG/SUM/MAX/MIN.
+// slp points at the lowercase select item, s at the original-case one
+// (column names keep original case).
+static void parse_agg_inner(char *slp, char *s, Stmt *out){
+    char *po=0,*pc=0; for(char *c=slp;*c;c++){ if(*c=='('&&!po) po=c; if(*c==')') pc=c; }
+    if(!(po&&pc)) return;
+    char *inner=po+1; while(rsc_isspace(*inner)) inner++;
+    if(rsc_strncmp(inner,"distinct",8)==0 && (inner[8]==0 || rsc_isspace(inner[8]))){
+        out->is_distinct=1;
+        inner+=8; while(rsc_isspace(*inner)) inner++;
+    }
+    char *ops=0,*cpe=0;
+    for(char *c=s;*c;c++){ if(*c=='('&&!ops) ops=c; if(*c==')') cpe=c; }
+    if(ops&&cpe){
+        char *in2=ops+1; while(rsc_isspace(*in2)) in2++;
+        {
+            char w[9]={0}; int wi=0; char *qq=in2;
+            while(*qq&&!rsc_isspace(*qq)&&wi<8) w[wi++]=rsc_tolower(*qq++);
+            w[wi]=0;
+            if(eqi(w,"distinct")){ in2=qq; while(rsc_isspace(*in2)) in2++; }
+        }
+        int ci=0; for(char *c=in2;c<cpe&&ci<31;c++) if(!rsc_isspace(*c)) out->agg_col[ci++]=*c; out->agg_col[ci]=0;
+    } else {
+        int ci=0; for(char *c=inner;c<pc&&ci<31;c++) if(!rsc_isspace(*c)) out->agg_col[ci++]=*c; out->agg_col[ci]=0;
+    }
+}
 static int parse_where(const char *p, Stmt *s){
     s->nwhere=0;
     while(*p){
@@ -349,55 +375,15 @@ int sql_parse(const char *sql, Stmt *out){
                 else rsc_strcpy(out->agg_col,"*");
             } else if(rsc_strncmp(slp,"avg",3)==0){
                 out->is_avg=1;
-                char *po=0,*pc=0; for(char *c=slp;*c;c++){ if(*c=='('&&!po) po=c; if(*c==')') pc=c; }
-                if(po&&pc){
-                    char *inner=po+1; while(rsc_isspace(*inner)) inner++;
-                    if(rsc_strncmp(inner,"distinct",8)==0 && (inner[8]==0 || rsc_isspace(inner[8]))){
-                        out->is_distinct=1;
-                        inner+=8; while(rsc_isspace(*inner)) inner++;
-                    }
-                    // AVG keeps original case for column name
-                    char *ops=0,*cpe=0;
-                    for(char *c=s;*c;c++){ if(*c=='('&&!ops) ops=c; if(*c==')') cpe=c; }
-                    if(ops&&cpe){
-                        char *in2=ops+1; while(rsc_isspace(*in2)) in2++;
-                        {
-                            char w[9]={0}; int wi=0; char *qq=in2;
-                            while(*qq&&!rsc_isspace(*qq)&&wi<8) w[wi++]=rsc_tolower(*qq++);
-                            w[wi]=0;
-                            if(eqi(w,"distinct")){ in2=qq; while(rsc_isspace(*in2)) in2++; }
-                        }
-                        int ci=0; for(char *c=in2;c<cpe&&ci<31;c++) if(!rsc_isspace(*c)) out->agg_col[ci++]=*c; out->agg_col[ci]=0;
-                    } else {
-                        int ci=0; for(char *c=inner;c<pc&&ci<31;c++) if(!rsc_isspace(*c)) out->agg_col[ci++]=*c; out->agg_col[ci]=0;
-                    }
-                }
+                parse_agg_inner(slp,s,out);
+            } else if(rsc_strncmp(slp,"sum",3)==0 && has_paren){
+                // The paren check keeps bare columns named sum selectable.
+                out->is_sum=1;
+                parse_agg_inner(slp,s,out);
             } else if((rsc_strncmp(slp,"max",3)==0 || rsc_strncmp(slp,"min",3)==0) && has_paren){
-                // MAX/MIN share the AVG(...) shape: optional DISTINCT, original-case column.
                 // The paren check keeps bare columns named max/min selectable.
                 if(slp[1]=='a') out->is_max=1; else out->is_min=1;
-                char *po=0,*pc=0; for(char *c=slp;*c;c++){ if(*c=='('&&!po) po=c; if(*c==')') pc=c; }
-                if(po&&pc){
-                    char *inner=po+1; while(rsc_isspace(*inner)) inner++;
-                    if(rsc_strncmp(inner,"distinct",8)==0 && (inner[8]==0 || rsc_isspace(inner[8]))){
-                        out->is_distinct=1;
-                        inner+=8; while(rsc_isspace(*inner)) inner++;
-                    }
-                    char *ops=0,*cpe=0;
-                    for(char *c=s;*c;c++){ if(*c=='('&&!ops) ops=c; if(*c==')') cpe=c; }
-                    if(ops&&cpe){
-                        char *in2=ops+1; while(rsc_isspace(*in2)) in2++;
-                        {
-                            char w[9]={0}; int wi=0; char *qq=in2;
-                            while(*qq&&!rsc_isspace(*qq)&&wi<8) w[wi++]=rsc_tolower(*qq++);
-                            w[wi]=0;
-                            if(eqi(w,"distinct")){ in2=qq; while(rsc_isspace(*in2)) in2++; }
-                        }
-                        int ci=0; for(char *c=in2;c<cpe&&ci<31;c++) if(!rsc_isspace(*c)) out->agg_col[ci++]=*c; out->agg_col[ci]=0;
-                    } else {
-                        int ci=0; for(char *c=inner;c<pc&&ci<31;c++) if(!rsc_isspace(*c)) out->agg_col[ci++]=*c; out->agg_col[ci]=0;
-                    }
-                }
+                parse_agg_inner(slp,s,out);
             } else {
                 char tmp[256]; rsc_strcpy(tmp, s);
                 trim(tmp);

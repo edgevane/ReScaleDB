@@ -101,18 +101,22 @@ SELECT DISTINCT * FROM users WHERE age > 18 ORDER BY nick LIMIT 10;
 
 ```sql
 SELECT COUNT(*) FROM users;
+SELECT COUNT() FROM users;                -- same as COUNT(*)
 SELECT COUNT(nick) FROM users;            -- non-null only
 SELECT COUNT(DISTINCT nick) FROM users;
 SELECT AVG(age) FROM users;               -- ignores NULL, NULL if none
 SELECT AVG(DISTINCT age) FROM users;
+SELECT SUM(age) FROM users;               -- ignores NULL, NULL if none
+SELECT SUM(DISTINCT age) FROM users;
 SELECT MAX(age) FROM users;               -- ignores NULL, NULL if none
 SELECT MIN(nick) FROM users;              -- lexicographic for TEXT
 SELECT MAX(DISTINCT age) FROM users;      -- DISTINCT accepted, same result
 ```
 
-`COUNT(*)` counts rows. `COUNT(col)` / `AVG(col)` / `MAX(col)` / `MIN(col)`
-skip `NULL`s. `AVG` requires an `INT` column. `MAX`/`MIN` work on both
-`INT` (numeric) and `TEXT` (lexicographic) columns and return `NULL`
+`COUNT(*)` (or bare `COUNT()`) counts rows. `COUNT(col)` / `AVG(col)` /
+`SUM(col)` / `MAX(col)` / `MIN(col)` skip `NULL`s. `AVG` and `SUM`
+require an `INT` column. `MAX`/`MIN` work on both `INT` (numeric) and
+`TEXT` (lexicographic) columns. All except `COUNT` return `NULL`
 when no non-null rows match.
 
 ## Update / Delete
