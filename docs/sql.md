@@ -105,10 +105,15 @@ SELECT COUNT(nick) FROM users;            -- non-null only
 SELECT COUNT(DISTINCT nick) FROM users;
 SELECT AVG(age) FROM users;               -- ignores NULL, NULL if none
 SELECT AVG(DISTINCT age) FROM users;
+SELECT MAX(age) FROM users;               -- ignores NULL, NULL if none
+SELECT MIN(nick) FROM users;              -- lexicographic for TEXT
+SELECT MAX(DISTINCT age) FROM users;      -- DISTINCT accepted, same result
 ```
 
-`COUNT(*)` counts rows. `COUNT(col)` / `AVG(col)` skip `NULL`s.
-`AVG` requires an `INT` column.
+`COUNT(*)` counts rows. `COUNT(col)` / `AVG(col)` / `MAX(col)` / `MIN(col)`
+skip `NULL`s. `AVG` requires an `INT` column. `MAX`/`MIN` work on both
+`INT` (numeric) and `TEXT` (lexicographic) columns and return `NULL`
+when no non-null rows match.
 
 ## Update / Delete
 

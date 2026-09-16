@@ -1,6 +1,6 @@
 [package]
 name = "rescaledb"
-version = "0.1.3-pre"
+version = "0.1.3-pre2"
 edition = "2021"
 description = "Safe Rust bindings for ReScaleDB - fast embedded SQL database, in-memory B+Tree with mmap"
 license = "MIT"

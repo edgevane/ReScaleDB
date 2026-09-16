@@ -324,6 +324,9 @@ int sql_parse(const char *sql, Stmt *out){
             char *s=sel; while(rsc_isspace(*s)) s++;
             char sl[256]={0}; for(int k=0;s[k];k++) sl[k]=rsc_tolower(s[k]);
             char *slp=sl; while(rsc_isspace(*slp)) slp++;
+            // Whether the select list calls a function (used to keep bare
+            // columns named max/min selectable as plain columns).
+            int has_paren=0; { char *c=slp; while(*c){ if(*c=='('){ has_paren=1; break; } c++; } }
             if(rsc_strncmp(slp,"distinct",8)==0 && (slp[8]==0 || rsc_isspace(slp[8]))){
                 out->is_distinct=1;
                 slp+=8; while(rsc_isspace(*slp)) slp++;
@@ -354,6 +357,32 @@ int sql_parse(const char *sql, Stmt *out){
                         inner+=8; while(rsc_isspace(*inner)) inner++;
                     }
                     // AVG keeps original case for column name
+                    char *ops=0,*cpe=0;
+                    for(char *c=s;*c;c++){ if(*c=='('&&!ops) ops=c; if(*c==')') cpe=c; }
+                    if(ops&&cpe){
+                        char *in2=ops+1; while(rsc_isspace(*in2)) in2++;
+                        {
+                            char w[9]={0}; int wi=0; char *qq=in2;
+                            while(*qq&&!rsc_isspace(*qq)&&wi<8) w[wi++]=rsc_tolower(*qq++);
+                            w[wi]=0;
+                            if(eqi(w,"distinct")){ in2=qq; while(rsc_isspace(*in2)) in2++; }
+                        }
+                        int ci=0; for(char *c=in2;c<cpe&&ci<31;c++) if(!rsc_isspace(*c)) out->agg_col[ci++]=*c; out->agg_col[ci]=0;
+                    } else {
+                        int ci=0; for(char *c=inner;c<pc&&ci<31;c++) if(!rsc_isspace(*c)) out->agg_col[ci++]=*c; out->agg_col[ci]=0;
+                    }
+                }
+            } else if((rsc_strncmp(slp,"max",3)==0 || rsc_strncmp(slp,"min",3)==0) && has_paren){
+                // MAX/MIN share the AVG(...) shape: optional DISTINCT, original-case column.
+                // The paren check keeps bare columns named max/min selectable.
+                if(slp[1]=='a') out->is_max=1; else out->is_min=1;
+                char *po=0,*pc=0; for(char *c=slp;*c;c++){ if(*c=='('&&!po) po=c; if(*c==')') pc=c; }
+                if(po&&pc){
+                    char *inner=po+1; while(rsc_isspace(*inner)) inner++;
+                    if(rsc_strncmp(inner,"distinct",8)==0 && (inner[8]==0 || rsc_isspace(inner[8]))){
+                        out->is_distinct=1;
+                        inner+=8; while(rsc_isspace(*inner)) inner++;
+                    }
                     char *ops=0,*cpe=0;
                     for(char *c=s;*c;c++){ if(*c=='('&&!ops) ops=c; if(*c==')') cpe=c; }
                     if(ops&&cpe){

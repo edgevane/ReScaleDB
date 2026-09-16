@@ -361,16 +361,16 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
         if(s->has_order){
             if(find_col(t,s->order_by)<0){ rsc_debug_unknown_column(db,s,s->order_by,"order"); set_col_error(out,cap,s->order_by); return -1; }
         }
-        if(s->is_avg){
+        if(s->is_avg || s->is_max || s->is_min){
             if(find_col(t,s->agg_col)<0){ rsc_debug_unknown_column(db,s,s->agg_col,"avg"); set_col_error(out,cap,s->agg_col); return -1; }
         }
         if(s->is_count && s->agg_col[0] && rsc_strcmp(s->agg_col,"*")!=0){
             if(find_col(t,s->agg_col)<0){ rsc_debug_unknown_column(db,s,s->agg_col,"count"); set_col_error(out,cap,s->agg_col); return -1; }
         }
         int proj_idx[16]; int proj_n=0;
-        int use_all = s->is_star || (s->nselect==0 && !s->is_count && !s->is_avg);
+        int use_all = s->is_star || (s->nselect==0 && !s->is_count && !s->is_avg && !s->is_max && !s->is_min);
         if(use_all){ for(int c=0;c<t->ncols;c++) proj_idx[proj_n++]=c; }
-        else if(!s->is_count && !s->is_avg){ for(int i=0;i<s->nselect;i++) proj_idx[proj_n++]=find_col(t,s->select_cols[i]); }
+        else if(!s->is_count && !s->is_avg && !s->is_max && !s->is_min){ for(int i=0;i<s->nselect;i++) proj_idx[proj_n++]=find_col(t,s->select_cols[i]); }
         ScanCtx ctx; rsc_memset(&ctx,0,sizeof(ctx)); ctx.db=db; ctx.t=t; ctx.st=s; ctx.out=out; ctx.cap=cap; ctx.off=0;
         btree_scan(db->pager,t->root,scan_cb,&ctx);
         // simple order by (bubble, NULLs last)
@@ -400,7 +400,7 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
                 }
             }
         }
-        if(s->is_count || s->is_avg){
+        if(s->is_count || s->is_avg || s->is_max || s->is_min){
             int cnt=ctx.nrows;
             usize off=0;
             #define OUTC2(c) do{ if(off+1<cap) out[off++]=c; }while(0)
@@ -486,6 +486,42 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
                 for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
                 if(off<cap) out[off]=0; else out[cap-1]=0; return 0;
             }
+            if(s->is_max || s->is_min){
+                int cidx=-1; for(int c=0;c<t->ncols;c++) if(rsc_strcmp(t->cols[c].name,s->agg_col)==0) cidx=c;
+                if(cidx<0) return -1;
+                // DISTINCT is accepted but cannot change an extremum, so it is ignored.
+                int is_int=(t->cols[cidx].type==COL_INT);
+                i64 best_n=0; char best_s[64]={0}; int n=0;
+                for(int r=0;r<cnt;r++){
+                    if(row_is_null(t,ctx.rows[r],cidx)) continue;
+                    char cb[64]={0}; row_cell_str(t,ctx.rows[r],cidx,cb,0);
+                    if(n==0){
+                        if(is_int) best_n=parse_int_val(cb); else rsc_strcpy(best_s,cb);
+                        n=1; continue;
+                    }
+                    if(is_int){
+                        i64 v=parse_int_val(cb);
+                        if(s->is_max ? v>best_n : v<best_n) best_n=v;
+                    } else {
+                        int cmp=rsc_strcmp(cb,best_s);
+                        if(s->is_max ? cmp>0 : cmp<0) rsc_strcpy(best_s,cb);
+                    }
+                }
+                char hdr2[64]; rsc_strcpy(hdr2,s->is_max?"MAX(":"MIN("); rsc_strcpy(hdr2+4,s->agg_col); rsc_strcpy(hdr2+4+rsc_strlen(s->agg_col),")");
+                char val[64];
+                if(n==0){ rsc_strcpy(val,"NULL"); }
+                else if(!is_int){ rsc_strcpy(val,best_s); }
+                else {
+                    int pos=0; int neg=0; i64 v=best_n; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
+                }
+                int w=(int)rsc_strlen(hdr2); int wl=(int)rsc_strlen(val); if(wl>w) w=wl;
+                for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
+                OUTS2(hdr2); OUTC2('\n');
+                for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
+                OUTS2(val); OUTC2('\n');
+                for(int k=0;k<w+2;k++) OUTC2('-'); OUTC2('-'); OUTC2('\n');
+                if(off<cap) out[off]=0; else out[cap-1]=0; return 0;
+            }
         }
         int nrows_all=ctx.nrows;
         if(nrows_all>256) nrows_all=256;
@@ -505,7 +541,7 @@ int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap){
             }
         }
         int nout=nrows_all;
-        if(s->is_distinct && !s->is_count && !s->is_avg){
+        if(s->is_distinct && !s->is_count && !s->is_avg && !s->is_max && !s->is_min){
             int w=0;
             for(int r=0;r<nout;r++){
                 int dup=0;
@@ -785,8 +821,37 @@ int db_query(Db *db, const char *sql, RscResult *res){
         rsc_strcpy(res->cells[0][0],val);
         return 0;
     }
+    if(s.is_max || s.is_min){
+        int cidx=-1; for(int c=0;c<t->ncols;c++) if(rsc_strcmp(t->cols[c].name,s.agg_col)==0) cidx=c;
+        if(cidx<0) return -1;
+        // DISTINCT is accepted but cannot change an extremum, so it is ignored.
+        int is_int=(t->cols[cidx].type==COL_INT);
+        i64 best_n=0; char best_s[64]={0}; int n=0;
+        for(int r=0;r<nrows_all;r++){
+            if(row_is_null(t,ctx.rows[r],cidx)) continue;
+            char cb[64]={0}; row_cell_str(t,ctx.rows[r],cidx,cb,0);
+            if(n==0){
+                if(is_int) best_n=parse_int_val(cb); else rsc_strcpy(best_s,cb);
+                n=1; continue;
+            }
+            if(is_int){
+                i64 v=parse_int_val(cb);
+                if(s.is_max ? v>best_n : v<best_n) best_n=v;
+            } else {
+                int cmp=rsc_strcmp(cb,best_s);
+                if(s.is_max ? cmp>0 : cmp<0) rsc_strcpy(best_s,cb);
+            }
+        }
+        res->ncols=1; rsc_strcpy(res->cols[0],s.is_max?"MAX(":"MIN("); rsc_strcpy(res->cols[0]+4,s.agg_col); res->cols[0][4+rsc_strlen(s.agg_col)]=')'; res->cols[0][5+rsc_strlen(s.agg_col)]=0;
+        res->nrows=1;
+        if(n==0){ rsc_strcpy(res->cells[0][0],"NULL"); return 0; }
+        if(!is_int){ rsc_strcpy(res->cells[0][0],best_s); return 0; }
+        char val[32]; int pos=0; int neg=0; i64 v=best_n; if(v<0){neg=1; v=-v;} char rev[32]; int rp=0; if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-'; for(int k=rp-1;k>=0;k--) val[pos++]=rev[k]; val[pos]=0;
+        rsc_strcpy(res->cells[0][0],val);
+        return 0;
+    }
     int proj_idx[16]; int proj_n=0;
-    int use_all = s.is_star || (s.nselect==0 && !s.is_count && !s.is_avg);
+    int use_all = s.is_star || (s.nselect==0 && !s.is_count && !s.is_avg && !s.is_max && !s.is_min);
     if(use_all){ for(int c=0;c<t->ncols;c++) proj_idx[proj_n++]=c; }
     else { for(int i=0;i<s.nselect;i++) proj_idx[proj_n++]=find_col(t,s.select_cols[i]); }
     res->ncols=proj_n;

@@ -53,6 +53,33 @@ int main(){
     ASSERT(strstr(out,"2")!=0,"count distinct skips null");
     db_exec(&d,"SELECT AVG(DISTINCT a) FROM t",out,sizeof(out));
     ASSERT(strstr(out,"1")!=0,"avg distinct");
+    ASSERT(db_exec(&d,"CREATE TABLE m (a INT, b TEXT)",out,sizeof(out))==0,"minmax create");
+    ASSERT(db_exec(&d,"INSERT INTO m VALUES (3, 'pear')",out,sizeof(out))==0,"minmax i1");
+    ASSERT(db_exec(&d,"INSERT INTO m VALUES (NULL, 'apple')",out,sizeof(out))==0,"minmax i2");
+    ASSERT(db_exec(&d,"INSERT INTO m VALUES (-5, NULL)",out,sizeof(out))==0,"minmax i3");
+    db_exec(&d,"SELECT MAX(a) FROM m",out,sizeof(out));
+    ASSERT(strstr(out,"3")!=0,"max int skips null");
+    db_exec(&d,"SELECT MIN(a) FROM m",out,sizeof(out));
+    ASSERT(strstr(out,"-5")!=0,"min int negative");
+    db_exec(&d,"SELECT MAX(b) FROM m",out,sizeof(out));
+    ASSERT(strstr(out,"pear")!=0,"max text");
+    db_exec(&d,"SELECT MIN(b) FROM m",out,sizeof(out));
+    ASSERT(strstr(out,"apple")!=0,"min text skips null");
+    db_exec(&d,"SELECT MAX(DISTINCT a) FROM m",out,sizeof(out));
+    ASSERT(strstr(out,"3")!=0,"max distinct");
+    ASSERT(db_exec(&d,"SELECT MAX(a) FROM t WHERE a > 100",out,sizeof(out))==0,"max empty set");
+    ASSERT(strstr(out,"NULL")!=0,"max empty is null");
+    ASSERT(db_exec(&d,"SELECT MIN(nope) FROM m",out,sizeof(out))!=0,"min bad column rejected");
+    {
+        RscResult rr2; rsc_memset(&rr2,0,sizeof(rr2));
+        ASSERT(db_query(&d,"SELECT MIN(a) FROM m",&rr2)==0,"min query");
+        ASSERT(rr2.nrows==1 && strcmp(rr2.cells[0][0],"-5")==0,"min query value");
+    }
+    {
+        RscResult rr3; rsc_memset(&rr3,0,sizeof(rr3));
+        ASSERT(db_query(&d,"SELECT MAX(b) FROM m",&rr3)==0,"max text query");
+        ASSERT(rr3.nrows==1 && strcmp(rr3.cells[0][0],"pear")==0,"max text query value");
+    }
     {
         RscResult rr; rsc_memset(&rr,0,sizeof(rr));
         ASSERT(db_query(&d,"SELECT DISTINCT b FROM t",&rr)==0,"distinct query");
