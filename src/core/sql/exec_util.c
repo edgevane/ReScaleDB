@@ -15,7 +15,7 @@ int vec_encode_str(const char *s, int dims, u8 *out);
 int row_vec_get(Table *t, u8 *row, int col, float *out, int maxn);
 float vec_cosine_dist(const float *a, const float *b, int n);
 int eval_cossim_row(Table *t, u8 *row, int col, const float *q, int qn, float thresh);
-int cossim_prepare(Db *db, Stmt *s, Table *t, char *out, usize cap, float *qf, int *qn, float *thresh, int *qcol);
+float cossim_dist_row(Table *t, u8 *row, int col, const float *q, int qn);int cossim_prepare(Db *db, Stmt *s, Table *t, char *out, usize cap, float *qf, int *qn, float *thresh, int *qcol);
 int row_replace_col(Table *t, u8 *oldrow, int oldlen, int col, const char *newval, int new_is_null, u8 *newrow, int *newlen);
 void set_vector_error(char *out, usize cap, const char *col);
 void set_cossim_error(char *out, usize cap, const char *msg);
@@ -389,6 +389,16 @@ int eval_cossim_row(Table *t, u8 *row, int col, const float *q, int qn, float th
     // epsilon: float32 rounding makes self-distance ~1e-8, so an exact
     // match would fail a threshold of 0 without tolerance.
     return vec_cosine_dist(cur,q,t->cols[col].dims)<=thresh+1e-6f;
+}
+// Distance only (2.0 = not comparable, sorts last). Scan pre-filters rows.
+float cossim_dist_row(Table *t, u8 *row, int col, const float *q, int qn){
+    if(col<0||col>=t->ncols) return 2.0f;
+    if(t->cols[col].type!=COL_VECTOR) return 2.0f;
+    if(row_is_null(t,row,col)) return 2.0f;
+    if(qn!=t->cols[col].dims) return 2.0f;
+    float cur[RSC_VEC_MAX_DIMS];
+    if(row_vec_get(t,row,col,cur,t->cols[col].dims)!=t->cols[col].dims) return 2.0f;
+    return vec_cosine_dist(cur,q,t->cols[col].dims);
 }
 // Validate s->has_cossim against table; parse query+threshold. 0 ok, -1 + ERR.
 int cossim_prepare(Db *db, Stmt *s, Table *t, char *out, usize cap, float *qf, int *qn, float *thresh, int *qcol){

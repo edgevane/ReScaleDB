@@ -29,6 +29,7 @@ int vec_encode_str(const char *s, int dims, u8 *out);
 int row_vec_get(Table *t, u8 *row, int col, float *out, int maxn);
 float vec_cosine_dist(const float *a, const float *b, int n);
 int eval_cossim_row(Table *t, u8 *row, int col, const float *q, int qn, float thresh);
+float cossim_dist_row(Table *t, u8 *row, int col, const float *q, int qn);
 int cossim_prepare(Db *db, Stmt *s, Table *t, char *out, usize cap, float *qf, int *qn, float *thresh, int *qcol);
 int row_replace_col(Table *t, u8 *oldrow, int oldlen, int col, const char *newval, int new_is_null, u8 *newrow, int *newlen);
 void set_vector_error(char *out, usize cap, const char *col);

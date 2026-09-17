@@ -138,6 +138,12 @@ int main(){
         ASSERT(db_query(&vv,"SELECT * FROM docs WHERE cossim(v, [1.0,0.0,0.0], 0.5)",&rr)==0,"vec db_query");
         ASSERT(rr.nrows==2,"vec db_query rows");
     }
+    db_exec(&vv,"SELECT * FROM docs WHERE cossim(v, [1.0,0.0,0.0], 0.5, 1)",out,sizeof(out));
+    ASSERT(strstr(out,"| 1 ")!=0 && strstr(out,"| 3 ")==0,"vec top-k 1");
+    db_exec(&vv,"SELECT * FROM docs WHERE cossim(v, [1.0,0.0,0.0], 0.5, 5)",out,sizeof(out));
+    { char *p1=strstr(out,"| 1 "), *p3=strstr(out,"| 3 ");
+      ASSERT(p1&&p3&&p1<p3,"vec top-k order"); }
+    ASSERT(db_exec(&vv,"SELECT * FROM docs WHERE cossim(v, [1.0,0.0,0.0], 0.5, 0)",out,sizeof(out))!=0,"vec top-k 0 rejected");
     db_close(&vv);
     Pager p2; pager_open(&p2,"/tmp/bt_test.rsc.db");
     u64 root=0; btree_create(&p2,&root);

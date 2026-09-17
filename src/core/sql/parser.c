@@ -64,12 +64,21 @@ static int parse_where(const char *p, Stmt *s){
                 if(*p!=',') return -1;
                 p++; p=skip_sp(p);
                 int ti=0;
-                while(*p&&*p!=')'&&*p!=';'&&ti<63) s->cossim_thresh[ti++]=*p++;
+                while(*p&&*p!=')'&&*p!=','&&*p!=';'&&ti<63) s->cossim_thresh[ti++]=*p++;
                 s->cossim_thresh[ti]=0;
                 trim(s->cossim_thresh);
+                if(*p!=')'&&*p!=',') return -1;
+                if(*p==','){
+                    // optional 4th arg: max results (top-k)
+                    p++; p=skip_sp(p);
+                    int kv=0, kd=0;
+                    while(*p&&rsc_isdigit(*p)&&kd<9){ kv=kv*10+(*p-'0'); p++; kd++; }
+                    if(!kd||kv<=0) return -1;
+                    s->cossim_k=kv;
+                    p=skip_sp(p);
+                }
                 if(*p!=')') return -1;
-                p++;
-                trim(s->cossim_qvec);
+                p++; trim(s->cossim_qvec);
                 if(cc[0]){ rsc_strcpy(s->cossim_col,cc); trim(s->cossim_col); s->has_cossim=1; }
                 p=skip_sp(p);
                 char tmp[8]={0}; int tij=0; const char *qq3=p;
@@ -503,7 +512,7 @@ int sql_parse(const char *sql, Stmt *out){
                 int where_end=rsc_strlen(buf);
                 for(const char *t=low+where_start;*t;t++){ if((t[0]=='o'&&t[1]=='r'&&t[2]=='d'&&t[3]=='e'&&t[4]=='r')||(t[0]=='l'&&t[1]=='i'&&t[2]=='m'&&t[3]=='i'&&t[4]=='t')||*t==';'){ where_end=t-low; break; } }
                 for(int k=where_start;k<where_end&&wi<2047;k++) where_buf[wi++]=buf[k]; where_buf[wi]=0;
-                parse_where(where_buf,out);
+                if(parse_where(where_buf,out)!=0) return -1;
                 p=buf+where_end;
             }
             p=skip_sp(p);
@@ -525,7 +534,7 @@ int sql_parse(const char *sql, Stmt *out){
         const char *from=0; for(const char *t=low;*t;t++) if(t[0]=='f'&&t[1]=='r'&&t[2]=='o'&&t[3]=='m'){from=t;break;}
         if(from){ int off=from-low; p=buf+off+4; p=skip_sp(p); i=0; while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<31) out->table[i++]=*p++; out->table[i]=0; p=skip_sp(p);
             char nxt[8]={0}; int ti=0; const char *qq=p; while(*qq&&!rsc_isspace(*qq)&&ti<7) nxt[ti++]=rsc_tolower(*qq++); nxt[ti]=0;
-            if(eqi(nxt,"where")){ p=qq; char wb[2048]={0}; int wi=0; int ws=p-buf; int we=rsc_strlen(buf); for(int k=ws;k<we&&wi<2047;k++) wb[wi++]=buf[k]; wb[wi]=0; parse_where(wb,out); }
+            if(eqi(nxt,"where")){ p=qq; char wb[2048]={0}; int wi=0; int ws=p-buf; int we=rsc_strlen(buf); for(int k=ws;k<we&&wi<2047;k++) wb[wi++]=buf[k]; wb[wi]=0; if(parse_where(wb,out)!=0) return -1; }
         }
         return 0;
     } else if(eqi(first,"update")){
@@ -548,7 +557,7 @@ int sql_parse(const char *sql, Stmt *out){
                 else if(eqi(vl,"default")) out->vals_is_default[0]=1;
             }
             // where
-            for(const char *t=low+(p-buf);*t;t++) if(t[0]=='w'&&t[1]=='h'&&t[2]=='e'&&t[3]=='r'&&t[4]=='e'){ int off2=t-low; p=buf+off2+5; char wb[2048]={0}; int wi=0; int ws=p-buf; int we=rsc_strlen(buf); for(int k=ws;k<we&&wi<2047;k++) wb[wi++]=buf[k]; wb[wi]=0; parse_where(wb,out); break; }
+            for(const char *t=low+(p-buf);*t;t++) if(t[0]=='w'&&t[1]=='h'&&t[2]=='e'&&t[3]=='r'&&t[4]=='e'){ int off2=t-low; p=buf+off2+5; char wb[2048]={0}; int wi=0; int ws=p-buf; int we=rsc_strlen(buf); for(int k=ws;k<we&&wi<2047;k++) wb[wi++]=buf[k]; wb[wi]=0; if(parse_where(wb,out)!=0) return -1; break; }
         }
         return 0;
     }

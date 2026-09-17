@@ -69,7 +69,12 @@ SELECT * FROM docs WHERE cossim(v, [0.1,0.2,0.4], 0.1);
   distance (`1 - cosine similarity`) to the query vector is `<=`
   max_distance. The query vector must have exactly `N` elements
   (`ERR cossim dimension mismatch` otherwise). `NULL` vectors never
-  match. Matching is a brute-force scan (no ANN index).
+  match. A tiny epsilon applies, so an exact match passes a threshold
+  of `0`. Matching is a brute-force scan (no ANN index).
+- Optional 4th argument: `cossim(col, [query...], max_distance, k)`
+  returns at most `k` rows, nearest first (`k >= 1`). Applies to
+  row-returning `SELECT` (ignored by aggregates and by `UPDATE` /
+  `DELETE`, which filter only).
 - `UNIQUE` is allowed on `VECTOR` (exact match); `PRIMARY KEY`,
   `DEFAULT`, `ORDER BY` and aggregates over `VECTOR` are rejected.
 - In `SELECT` output and `db_query` cells vectors print as

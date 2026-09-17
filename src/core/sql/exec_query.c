@@ -32,6 +32,18 @@ int db_query(Db *db, const char *sql, RscResult *res){
     ScanCtx ctx; rsc_memset(&ctx,0,sizeof(ctx)); ctx.db=db; ctx.t=t; ctx.st=&s;
     if(s.has_cossim){ ctx.cossim_col=cossim_col; ctx.cossim_q=cossim_qf; ctx.cossim_qn=cossim_qn; ctx.cossim_thresh=cossim_th; }
     btree_scan(db->pager,t->root,scan_cb,&ctx);
+    if(s.has_cossim && s.cossim_k>0 && !s.is_count && !s.is_avg && !s.is_sum && !s.is_max && !s.is_min && ctx.nrows>0){
+        float cdist[256];
+        for(int i=0;i<ctx.nrows;i++) cdist[i]=cossim_dist_row(t,ctx.rows[i],cossim_col,cossim_qf,cossim_qn);
+        for(int i=0;i<ctx.nrows;i++) for(int j=i+1;j<ctx.nrows;j++){
+            if(cdist[j]<cdist[i]){
+                float td=cdist[i]; cdist[i]=cdist[j]; cdist[j]=td;
+                u8 *tr=ctx.rows[i]; ctx.rows[i]=ctx.rows[j]; ctx.rows[j]=tr;
+                u16 tl=ctx.lens[i]; ctx.lens[i]=ctx.lens[j]; ctx.lens[j]=tl;
+            }
+        }
+        if(ctx.nrows>s.cossim_k) ctx.nrows=s.cossim_k;
+    }
     if(s.has_order){
         int oidx=-1; for(int i=0;i<t->ncols;i++) if(rsc_strcmp(t->cols[i].name,s.order_by)==0) oidx=i;
         if(oidx>=0){

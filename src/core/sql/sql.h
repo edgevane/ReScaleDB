@@ -39,6 +39,7 @@ typedef struct {
     char cossim_col[32];
     char cossim_qvec[RSC_VEC_MAX];
     char cossim_thresh[64];
+    int cossim_k;
     char orig_sql[256];
     Table *bound_table;
 } Stmt;
