@@ -100,7 +100,18 @@ int main(){
         ASSERT(rr.nrows==2,"distinct query rows");
     }
     db_close(&d);
-    // btree direct isolated
+    // regression: freelist exhausted by 3 CREATEs (4-page mem db),
+    // first INSERT must survive pager grow/remap
+    Db g; db_init(&g);
+    ASSERT(db_exec(&g,"CREATE TABLE g1(id INT PRIMARY KEY, name TEXT)",out,sizeof(out))==0,"grow create 1");
+    ASSERT(db_exec(&g,"CREATE TABLE g2(id INT PRIMARY KEY, name TEXT)",out,sizeof(out))==0,"grow create 2");
+    ASSERT(db_exec(&g,"CREATE TABLE g3(id INT PRIMARY KEY, name TEXT)",out,sizeof(out))==0,"grow create 3");
+    ASSERT(db_exec(&g,"INSERT INTO g1 VALUES (1, 'a')",out,sizeof(out))==0,"grow insert after 3 creates");
+    db_exec(&g,"SELECT * FROM g1 WHERE id = 1",out,sizeof(out));
+    ASSERT(strstr(out,"a")!=0,"grow insert visible");
+    ASSERT(db_exec(&g,"INSERT INTO g2 VALUES (2, 'b')",out,sizeof(out))==0,"grow insert t2");
+    ASSERT(db_exec(&g,"INSERT INTO g3 VALUES (3, 'c')",out,sizeof(out))==0,"grow insert t3");
+    db_close(&g);
     Pager p2; pager_open(&p2,"/tmp/bt_test.rsc.db");
     u64 root=0; btree_create(&p2,&root);
     ASSERT(btree_insert(&p2,&root,"k1",2,"v1",2)==0,"btree insert");

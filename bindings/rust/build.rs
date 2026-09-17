@@ -13,7 +13,13 @@ fn main() {
     b.file("c_src/core/dump.c");
     b.file("c_src/core/debug.c");
     b.file("c_src/core/sql/parser.c");
-    b.file("c_src/core/sql/executor.c");
+    b.file("c_src/core/sql/exec_util.c");
+    b.file("c_src/core/sql/exec_ddl.c");
+    b.file("c_src/core/sql/exec_insert.c");
+    b.file("c_src/core/sql/exec_select.c");
+    b.file("c_src/core/sql/exec_write.c");
+    b.file("c_src/core/sql/exec_stmt.c");
+    b.file("c_src/core/sql/exec_query.c");
     b.file("c_src/core/sql/db.c");
     b.flag("-fPIC");
     b.flag("-O2");

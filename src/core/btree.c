@@ -141,11 +141,18 @@ static int node_insert_branch(BNode *n,int pos,const void *k,u16 kl,u64 left,u64
     return 0;
 }
 
-static u64 alloc_copy(Pager *p,BNode *src){
+// pager_alloc may remap the whole mapping when growing (mem + file DBs),
+// invalidating every BNode* the caller holds. Snapshot the source page
+// first, then copy from the snapshot into the new page.
+static u64 alloc_copy(Pager *p,u64 src_pn){
+    u8 tmp[RSC_PAGE_SIZE];
+    BNode *src=node_get(p,src_pn);
+    if(!src) return 0;
+    rsc_memcpy(tmp,src,RSC_PAGE_SIZE);
     u64 pn=pager_alloc(p);
     if(!pn) return 0;
     BNode *dst=node_get(p,pn);
-    rsc_memcpy(dst,src,RSC_PAGE_SIZE);
+    rsc_memcpy(dst,tmp,RSC_PAGE_SIZE);
     return pn;
 }
 
@@ -185,6 +192,7 @@ int btree_insert(Pager *p,u64 *root,const void *key,u16 klen,const void *val,u16
         tmp.nkeys--;
         u64 new_pn=pager_alloc(p);
         if(!new_pn) return -1;
+        leaf=node_get(p,leaf_pn); // remap above may have moved the mapping
         BNode *nl=node_get(p,new_pn);
         node_init(nl,1);
         nl->next_leaf=leaf->next_leaf;
@@ -204,7 +212,7 @@ int btree_insert(Pager *p,u64 *root,const void *key,u16 klen,const void *val,u16
         u64 parent_pn=path[depth-2];
         BNode *par=node_get(p,parent_pn);
         // COW parent chain
-        u64 new_parent=alloc_copy(p,par);
+        u64 new_parent=alloc_copy(p,parent_pn);
         if(!new_parent) return -1;
         BNode *np=node_get(p,new_parent);
         for(int i=0;i<np->nkeys;i++){
@@ -224,7 +232,7 @@ int btree_insert(Pager *p,u64 *root,const void *key,u16 klen,const void *val,u16
         return 0;
     }
     if(node_free(leaf) >= entry_size_leaf(klen,vlen)+2){
-        u64 new_leaf=alloc_copy(p,leaf);
+        u64 new_leaf=alloc_copy(p,leaf_pn);
         if(!new_leaf) return -1;
         BNode *nl=node_get(p,new_leaf);
         int rc=node_insert_leaf(nl,pos,key,klen,val,vlen);
@@ -233,7 +241,7 @@ int btree_insert(Pager *p,u64 *root,const void *key,u16 klen,const void *val,u16
         // update parent
         u64 parent_pn=path[depth-2];
         BNode *par=node_get(p,parent_pn);
-        u64 new_par=alloc_copy(p,par);
+        u64 new_par=alloc_copy(p,parent_pn);
         if(!new_par){ pager_free(p,new_leaf); return -1; }
         BNode *np=node_get(p,new_par);
         for(int i=0;i<np->nkeys;i++){
@@ -254,6 +262,7 @@ int btree_insert(Pager *p,u64 *root,const void *key,u16 klen,const void *val,u16
     // need split leaf
     u64 new_leaf_pn=pager_alloc(p);
     if(!new_leaf_pn) return -1;
+    leaf=node_get(p,leaf_pn); // remap above may have moved the mapping
     BNode *new_leaf=node_get(p,new_leaf_pn);
     node_init(new_leaf,1);
     // collect all entries sorted + new
@@ -274,7 +283,10 @@ int btree_insert(Pager *p,u64 *root,const void *key,u16 klen,const void *val,u16
     rsc_memcpy(tmp_entries[pos].v,val,vlen);
     cnt++;
     int mid=cnt/2;
-    u64 old_leaf_new=alloc_copy(p,leaf);
+    u64 old_leaf_new=alloc_copy(p,leaf_pn);
+    // grow inside alloc_copy remaps; re-fetch pointers taken before it
+    leaf=node_get(p,leaf_pn);
+    new_leaf=node_get(p,new_leaf_pn);
     // we will reuse old_leaf_new as left, new_leaf as right; need to rebuild both
     BNode *left=node_get(p,old_leaf_new);
     node_init(left,1);
@@ -298,7 +310,7 @@ int btree_insert(Pager *p,u64 *root,const void *key,u16 klen,const void *val,u16
     // need to insert into parent - COW parent and handle parent split recursively (only one level for now)
     u64 parent_pn=path[depth-2];
     BNode *par=node_get(p,parent_pn);
-    u64 new_par=alloc_copy(p,par);
+    u64 new_par=alloc_copy(p,parent_pn);
     BNode *np=node_get(p,new_par);
     // find pos in parent where leaf was
     int ppos=-1;
@@ -355,4 +367,4 @@ int btree_scan(Pager *p,u64 root,void (*cb)(const void*k,u16 kl,const void*v,u16
     while(pn){ BNode *n=node_get(p,pn); if(!n) break; for(int i=0;i<n->nkeys;i++){ u8 *e=node_data(n)+n->offs[i]; u16 kl=*(u16*)e; u16 vl=*(u16*)(e+2); cb(e+4,kl,e+4+kl,vl,ctx); } pn=n->next_leaf; }
     return 0;
 }
-u64 btree_new_root_cow(Pager *p,u64 old_root){ if(!old_root) return 0; u64 np=alloc_copy(p,node_get(p,old_root)); return np; }
+u64 btree_new_root_cow(Pager *p,u64 old_root){ if(!old_root) return 0; u64 np=alloc_copy(p,old_root); return np; }

@@ -3,5 +3,6 @@ out/
 *.o
 bindings/rust/target
 bindings/java/build
+bindings/java/src/main/resources
 bindings/java/.gradle
 build

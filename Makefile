@@ -47,7 +47,13 @@ SRC_CORE := \
 	src/core/dump.c \
 	src/core/debug.c \
 	src/core/sql/parser.c \
-	src/core/sql/executor.c \
+	src/core/sql/exec_util.c \
+	src/core/sql/exec_ddl.c \
+	src/core/sql/exec_insert.c \
+	src/core/sql/exec_select.c \
+	src/core/sql/exec_write.c \
+	src/core/sql/exec_stmt.c \
+	src/core/sql/exec_query.c \
 	src/core/sql/db.c
 SRC := $(SRC_LIBS) $(SRC_ARCH) $(SRC_CORE)
 OBJS := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SRC))
