@@ -132,11 +132,11 @@ jobs:
           workspaces: bindings/rust
 
       - name: Package crate
-        run: cargo package --manifest-path bindings/rust/Cargo.toml --locked
+        run: cargo package --manifest-path bindings/rust/Cargo.toml 
 
       - name: Publish to crates.io
         if: env.CARGO_REGISTRY_TOKEN != ''
-        run: cargo publish --manifest-path bindings/rust/Cargo.toml --locked --token "$CARGO_REGISTRY_TOKEN"
+        run: cargo publish --manifest-path bindings/rust/Cargo.toml --token "$CARGO_REGISTRY_TOKEN"
 
       - name: Skip publish without token
         if: env.CARGO_REGISTRY_TOKEN == ''
