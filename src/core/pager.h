@@ -2,7 +2,7 @@
 #include "../libs/types.h"
 #define RSC_PAGE_SIZE 4096
 #define RSC_MAGIC 0x52534344u
-#define RSC_VERSION 3u
+#define RSC_VERSION 4u
 typedef struct {
     u32 magic;
     u32 version;

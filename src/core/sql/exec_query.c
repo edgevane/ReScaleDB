@@ -22,7 +22,15 @@ int db_query(Db *db, const char *sql, RscResult *res){
     if(s.is_sum) if(find_col(t,s.agg_col)<0){ rsc_debug_unknown_column(db,&s,s.agg_col,"sum"); return -1; }
     if(s.is_max || s.is_min) if(find_col(t,s.agg_col)<0){ rsc_debug_unknown_column(db,&s,s.agg_col,s.is_max?"max":"min"); return -1; }
     if(s.is_count && s.agg_col[0] && rsc_strcmp(s.agg_col,"*")!=0) if(find_col(t,s.agg_col)<0){ rsc_debug_unknown_column(db,&s,s.agg_col,"count"); return -1; }
+    for(int i=0;i<s.nwhere;i++){ int wc=find_col(t,s.where[i].col); if(wc>=0&&t->cols[wc].type==COL_VECTOR) return -1; }
+    if(s.has_order){ int oc=find_col(t,s.order_by); if(oc>=0&&t->cols[oc].type==COL_VECTOR) return -1; }
+    if(s.is_avg||s.is_sum||s.is_max||s.is_min){ int ac=find_col(t,s.agg_col); if(ac>=0&&t->cols[ac].type==COL_VECTOR) return -1; }
+    float cossim_qf[RSC_VEC_MAX_DIMS]; int cossim_qn=0; float cossim_th=0; int cossim_col=-1;
+    if(s.has_cossim){
+        if(cossim_prepare(db,&s,t,0,0,cossim_qf,&cossim_qn,&cossim_th,&cossim_col)!=0) return -1;
+    }
     ScanCtx ctx; rsc_memset(&ctx,0,sizeof(ctx)); ctx.db=db; ctx.t=t; ctx.st=&s;
+    if(s.has_cossim){ ctx.cossim_col=cossim_col; ctx.cossim_q=cossim_qf; ctx.cossim_qn=cossim_qn; ctx.cossim_thresh=cossim_th; }
     btree_scan(db->pager,t->root,scan_cb,&ctx);
     if(s.has_order){
         int oidx=-1; for(int i=0;i<t->ncols;i++) if(rsc_strcmp(t->cols[i].name,s.order_by)==0) oidx=i;

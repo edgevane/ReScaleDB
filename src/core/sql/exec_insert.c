@@ -11,11 +11,11 @@ int exec_insert(Db *db, Stmt *s, char *out, usize cap){
         if(idx<0){ rsc_debug_unknown_table(db,s,s->table); set_table_error(out,cap,s->table); return -1; }
         Table *t=&db->tables[idx];
         if(s->nvals != t->ncols){ if(out&&cap) rsc_strcpy(out,"ERR column count\n"); return -1; }
-        char fvals[16][64]; int fis_null[16]={0};
+        char fvals[16][RSC_VEC_MAX]; int fis_null[16]={0};
         extern void rsc_debug_constraint(Db *db, Stmt *s, const char *col, const char *errmsg);
         for(int i=0;i<t->ncols;i++){
             int is_null=0;
-            char tmp[64]={0};
+            char tmp[RSC_VEC_MAX]={0};
             if(s->vals_is_default[i]){
                 if(t->cols[i].has_default){
                     if(t->cols[i].default_is_null) is_null=1;
@@ -56,7 +56,13 @@ int exec_insert(Db *db, Stmt *s, char *out, usize cap){
         }
         u8 row[1024]; int off=0;
         if(t->has_nullmap){
-            encode_row_new(t,fvals,fis_null,row,&off);
+            if(encode_row_new(t,fvals,fis_null,row,&off)!=0){
+                const char *bad=t->cols[0].name;
+                for(int i=0;i<t->ncols;i++) if(t->cols[i].type==COL_VECTOR&&!fis_null[i]){ bad=t->cols[i].name; break; }
+                set_vector_error(out,cap,bad);
+                rsc_debug_constraint(db,s,bad,out);
+                return -1;
+            }
         } else {
             for(int i=0;i<t->ncols;i++){
                 if(t->cols[i].type==COL_INT){

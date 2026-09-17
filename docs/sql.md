@@ -52,6 +52,29 @@ Rules:
 `CREATE INDEX name ON table(col)` is accepted but currently a no-op
 (the primary B+Tree serves all scans).
 
+## Vectors
+
+```sql
+CREATE TABLE docs(id INT PRIMARY KEY, v VECTOR[128]);
+INSERT INTO docs VALUES (1, [0.1,0.2,0.3]);
+SELECT * FROM docs WHERE cossim(v, [0.1,0.2,0.4], 0.1);
+```
+
+- `VECTOR[N]` stores `N` float32 components (`1`–`255`; one row holds
+  ~1000 bytes total, so `N * 4` plus the other columns must fit).
+- Vector literals are unquoted `[1.0,2.0,...]` (up to 1024 chars by
+  default; see `rsc_set_vector_limit`). Inserts with a wrong element
+  count or non-numeric elements fail with `ERR invalid vector`.
+- `cossim(col, [query...], max_distance)` keeps rows whose cosine
+  distance (`1 - cosine similarity`) to the query vector is `<=`
+  max_distance. The query vector must have exactly `N` elements
+  (`ERR cossim dimension mismatch` otherwise). `NULL` vectors never
+  match. Matching is a brute-force scan (no ANN index).
+- `UNIQUE` is allowed on `VECTOR` (exact match); `PRIMARY KEY`,
+  `DEFAULT`, `ORDER BY` and aggregates over `VECTOR` are rejected.
+- In `SELECT` output and `db_query` cells vectors print as
+  `[f,f,...]`, truncated to 63 chars like long `TEXT`.
+
 ## Insert
 
 `VALUES` are positional and must match the column count.

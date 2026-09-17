@@ -93,6 +93,15 @@ error) instead of silent `-1`, enable debug once:
 rsc_enable_debug(1); // from sql.h; 0 disables again
 ```
 
+Vector literal size is capped (default 1024 chars, enough for ~100
+short floats). To accept longer/shorter `[...]` literals within the
+compile-time ceiling (`RSC_VEC_MAX`, default 1024):
+
+```c
+rsc_set_vector_limit(512); // clamp to [64, RSC_VEC_MAX]
+int lim = rsc_get_vector_limit();
+```
+
 Raw pager save/load (`pager_save(db.pager, path)` /
 `pager_load(db.pager, path)`) exists but prefer the SQL
 `DUMP ALL` / `LOAD ALL` statements.

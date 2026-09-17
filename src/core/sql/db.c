@@ -13,6 +13,7 @@ static void db_save_catalog(Db *db){
         for(int c=0;c<t->ncols;c++){
             rsc_memcpy(p,t->cols[c].name,32); p+=32;
             *(u32*)p=(u32)t->cols[c].type; p+=4;
+            *(u32*)p=(u32)t->cols[c].dims; p+=4;
             *(u32*)p=(u32)t->cols[c].is_pk; p+=4;
             *(u32*)p=(u32)t->cols[c].is_unique; p+=4;
             *(u32*)p=(u32)t->cols[c].is_not_null; p+=4;
@@ -45,6 +46,7 @@ void db_load_catalog(Db *db){
             t->cols[c].default_val[0]=0;
             rsc_memcpy(t->cols[c].name,p,32); p+=32;
             t->cols[c].type=(ColType)*(u32*)p; p+=4;
+            if(ver>=4){ t->cols[c].dims=(int)*(u32*)p; p+=4; }
             if(ver>=2){ t->cols[c].is_pk=(int)*(u32*)p; p+=4; }
             if(ver>=3){
                 t->cols[c].is_unique=(int)*(u32*)p; p+=4;

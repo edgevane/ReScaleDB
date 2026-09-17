@@ -35,6 +35,13 @@ int exec_ddl(Db *db, Stmt *s, char *out, usize cap){
         int pk_count=0; int pk_idx=-1;
         for(int i=0;i<s->ncols;i++) if(s->cols[i].is_pk){ pk_count++; pk_idx=i; }
         if(pk_count>1){ if(out&&cap) rsc_strcpy(out,"ERR multiple primary keys\n"); return -1; }
+        for(int i=0;i<s->ncols;i++){
+            if(s->cols[i].type==COL_VECTOR){
+                if(s->cols[i].dims<=0||s->cols[i].dims>RSC_VEC_MAX_DIMS){ if(out&&cap) rsc_strcpy(out,"ERR invalid VECTOR dims\n"); return -1; }
+                if(s->cols[i].is_pk){ if(out&&cap) rsc_strcpy(out,"ERR PRIMARY KEY on VECTOR not supported\n"); return -1; }
+                if(s->cols[i].has_default){ if(out&&cap) rsc_strcpy(out,"ERR DEFAULT on VECTOR not supported\n"); return -1; }
+            }
+        }
         Table *t=&db->tables[db->ntables++];
         rsc_strcpy(t->name,s->table);
         t->ncols=s->ncols; for(int i=0;i<s->ncols;i++) t->cols[i]=s->cols[i];

@@ -27,7 +27,7 @@ void rsc_debug(const char *msg){
     wline(msg);
 }
 
-static const char *coltype_name(ColType t){ return t==COL_INT ? "INT" : "TEXT"; }
+static const char *coltype_name(ColType t){ return t==COL_INT ? "INT" : (t==COL_VECTOR ? "VECTOR" : "TEXT"); }
 
 static void print_header_query(Stmt *s){
     wline("[ReScaleDB DEBUG]");
@@ -65,6 +65,7 @@ static void print_table_info(Db *db, const char *tname, Table *t){
         w(t->cols[i].name);
         w("  ");
         w(coltype_name(t->cols[i].type));
+        if(t->cols[i].type==COL_VECTOR){ w("["); wint(t->cols[i].dims); w("]"); }
         if(i==t->pk_col) w("  PRIMARY KEY");
         if(t->cols[i].is_unique && i!=t->pk_col) w("  UNIQUE");
         if(t->cols[i].is_not_null && i!=t->pk_col) w("  NOT NULL");

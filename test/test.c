@@ -112,6 +112,31 @@ int main(){
     ASSERT(db_exec(&g,"INSERT INTO g2 VALUES (2, 'b')",out,sizeof(out))==0,"grow insert t2");
     ASSERT(db_exec(&g,"INSERT INTO g3 VALUES (3, 'c')",out,sizeof(out))==0,"grow insert t3");
     db_close(&g);
+    Db vv; db_init(&vv);
+    ASSERT(db_exec(&vv,"CREATE TABLE docs(id INT PRIMARY KEY, v VECTOR[3])",out,sizeof(out))==0,"vec create");
+    ASSERT(db_exec(&vv,"INSERT INTO docs VALUES (1, [1.0,0.0,0.0])",out,sizeof(out))==0,"vec i1");
+    ASSERT(db_exec(&vv,"INSERT INTO docs VALUES (2, [0.0,1.0,0.0])",out,sizeof(out))==0,"vec i2");
+    ASSERT(db_exec(&vv,"INSERT INTO docs VALUES (3, [0.7,0.7,0.0])",out,sizeof(out))==0,"vec i3");
+    db_exec(&vv,"SELECT * FROM docs WHERE cossim(v, [1.0,0.0,0.0], 0.1)",out,sizeof(out));
+    ASSERT(strstr(out,"| 1 ")!=0 && strstr(out,"| 2 ")==0 && strstr(out,"| 3 ")==0,"vec cossim narrow");
+    db_exec(&vv,"SELECT * FROM docs WHERE cossim(v, [1.0,0.0,0.0], 0.5)",out,sizeof(out));
+    ASSERT(strstr(out,"| 1 ")!=0 && strstr(out,"| 3 ")!=0 && strstr(out,"| 2 ")==0,"vec cossim wide");
+    ASSERT(db_exec(&vv,"INSERT INTO docs VALUES (4, [1.0,0.0])",out,sizeof(out))!=0,"vec dims mismatch");
+    ASSERT(db_exec(&vv,"INSERT INTO docs VALUES (4, [x,y,z])",out,sizeof(out))!=0,"vec bad float");
+    ASSERT(db_exec(&vv,"SELECT * FROM docs WHERE cossim(v, [1.0], 0.1)",out,sizeof(out))!=0,"vec query dims");
+    ASSERT(db_exec(&vv,"SELECT * FROM docs WHERE v = 5",out,sizeof(out))!=0,"vec no compare");
+    ASSERT(db_exec(&vv,"CREATE TABLE uq(id INT, v VECTOR[2] UNIQUE)",out,sizeof(out))==0,"vec unique create");
+    ASSERT(db_exec(&vv,"INSERT INTO uq VALUES (1, [1.0,2.0])",out,sizeof(out))==0,"vec unique ok");
+    ASSERT(db_exec(&vv,"INSERT INTO uq VALUES (2, [1.0,2.0])",out,sizeof(out))!=0,"vec unique dup");
+    ASSERT(db_exec(&vv,"UPDATE docs SET v = [0.0,0.0,1.0] WHERE id = 2",out,sizeof(out))==0,"vec update");
+    db_exec(&vv,"SELECT * FROM docs WHERE cossim(v, [0.0,0.0,1.0], 0.01)",out,sizeof(out));
+    ASSERT(strstr(out,"| 2 ")!=0,"vec updated visible");
+    {
+        RscResult rr; rsc_memset(&rr,0,sizeof(rr));
+        ASSERT(db_query(&vv,"SELECT * FROM docs WHERE cossim(v, [1.0,0.0,0.0], 0.5)",&rr)==0,"vec db_query");
+        ASSERT(rr.nrows==2,"vec db_query rows");
+    }
+    db_close(&vv);
     Pager p2; pager_open(&p2,"/tmp/bt_test.rsc.db");
     u64 root=0; btree_create(&p2,&root);
     ASSERT(btree_insert(&p2,&root,"k1",2,"v1",2)==0,"btree insert");

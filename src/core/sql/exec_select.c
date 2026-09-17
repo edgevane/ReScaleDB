@@ -33,11 +33,29 @@ int exec_select(Db *db, Stmt *s, char *out, usize cap){
         if(s->is_count && s->agg_col[0] && rsc_strcmp(s->agg_col,"*")!=0){
             if(find_col(t,s->agg_col)<0){ rsc_debug_unknown_column(db,s,s->agg_col,"count"); set_col_error(out,cap,s->agg_col); return -1; }
         }
+        // VECTOR: only cossim() filtering — no plain comparisons, ORDER BY or aggregates.
+        for(int i=0;i<s->nwhere;i++){
+            int wc=find_col(t,s->where[i].col);
+            if(wc>=0&&t->cols[wc].type==COL_VECTOR){ set_cossim_error(out,cap,"ERR cannot compare VECTOR"); return -1; }
+        }
+        if(s->has_order){
+            int oc=find_col(t,s->order_by);
+            if(oc>=0&&t->cols[oc].type==COL_VECTOR){ set_cossim_error(out,cap,"ERR cannot ORDER BY VECTOR"); return -1; }
+        }
+        if(s->is_avg||s->is_sum||s->is_max||s->is_min){
+            int ac=find_col(t,s->agg_col);
+            if(ac>=0&&t->cols[ac].type==COL_VECTOR){ set_cossim_error(out,cap,"ERR aggregate on VECTOR not supported"); return -1; }
+        }
+        float cossim_qf[RSC_VEC_MAX_DIMS]; int cossim_qn=0; float cossim_th=0; int cossim_col=-1;
+        if(s->has_cossim){
+            if(cossim_prepare(db,s,t,out,cap,cossim_qf,&cossim_qn,&cossim_th,&cossim_col)!=0) return -1;
+        }
         int proj_idx[16]; int proj_n=0;
         int use_all = s->is_star || (s->nselect==0 && !s->is_count && !s->is_avg && !s->is_sum && !s->is_max && !s->is_min);
         if(use_all){ for(int c=0;c<t->ncols;c++) proj_idx[proj_n++]=c; }
         else if(!s->is_count && !s->is_avg && !s->is_sum && !s->is_max && !s->is_min){ for(int i=0;i<s->nselect;i++) proj_idx[proj_n++]=find_col(t,s->select_cols[i]); }
         ScanCtx ctx; rsc_memset(&ctx,0,sizeof(ctx)); ctx.db=db; ctx.t=t; ctx.st=s; ctx.out=out; ctx.cap=cap; ctx.off=0;
+        if(s->has_cossim){ ctx.cossim_col=cossim_col; ctx.cossim_q=cossim_qf; ctx.cossim_qn=cossim_qn; ctx.cossim_thresh=cossim_th; }
         btree_scan(db->pager,t->root,scan_cb,&ctx);
         // simple order by (bubble, NULLs last)
         if(s->has_order){

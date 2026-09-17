@@ -7,6 +7,10 @@ static int eqi(const char *a,const char *b){
 }
 static void trim(char *s){ char *p=s; while(rsc_isspace(*p)) p++; if(p!=s) rsc_memmove(s,p,rsc_strlen(p)+1); usize n=rsc_strlen(s); while(n&&rsc_isspace(s[n-1])) s[--n]=0; }
 static const char *skip_sp(const char *p){ while(rsc_isspace(*p)) p++; return p; }
+// Runtime-configurable cap for [...] vector literals (default RSC_VEC_MAX).
+static int vec_limit=RSC_VEC_MAX;
+void rsc_set_vector_limit(int n){ if(n<64) n=64; if(n>RSC_VEC_MAX) n=RSC_VEC_MAX; vec_limit=n; }
+int rsc_get_vector_limit(void){ return vec_limit; }
 // Parse the ([DISTINCT] col) part of AVG/SUM/MAX/MIN.
 // slp points at the lowercase select item, s at the original-case one
 // (column names keep original case).
@@ -37,6 +41,44 @@ static int parse_where(const char *p, Stmt *s){
     s->nwhere=0;
     while(*p){
         p=skip_sp(p); if(!*p||*p==';') break;
+        // cossim(col, [qvec...], thresh) — vector filter, classname case-insensitive
+        {
+            char fn[8]={0}; int fi=0; const char *fq=p;
+            while(*fq&&!rsc_isspace(*fq)&&*fq!='('&&fi<7) fn[fi++]=rsc_tolower(*fq++);
+            fn[fi]=0;
+            if(eqi(fn,"cossim")){
+                p=skip_sp(fq);
+                if(*p!='(') return -1;
+                p++; p=skip_sp(p);
+                char cc[32]={0}; int ci=0;
+                while(*p&&*p!=','&&*p!=')'&&!rsc_isspace(*p)&&ci<31) cc[ci++]=*p++;
+                cc[ci]=0; p=skip_sp(p);
+                if(*p!=',') return -1;
+                p++; p=skip_sp(p);
+                if(*p!='[') return -1;
+                p++; int qi=0;
+                while(*p&&*p!=']'&&qi<vec_limit-1) s->cossim_qvec[qi++]=*p++;
+                s->cossim_qvec[qi]=0;
+                if(*p!=']') return -1;
+                p++; p=skip_sp(p);
+                if(*p!=',') return -1;
+                p++; p=skip_sp(p);
+                int ti=0;
+                while(*p&&*p!=')'&&*p!=';'&&ti<63) s->cossim_thresh[ti++]=*p++;
+                s->cossim_thresh[ti]=0;
+                trim(s->cossim_thresh);
+                if(*p!=')') return -1;
+                p++;
+                trim(s->cossim_qvec);
+                if(cc[0]){ rsc_strcpy(s->cossim_col,cc); trim(s->cossim_col); s->has_cossim=1; }
+                p=skip_sp(p);
+                char tmp[8]={0}; int tij=0; const char *qq3=p;
+                while(*qq3&&!rsc_isspace(*qq3)&&tij<7) tmp[tij++]=rsc_tolower(*qq3++);
+                tmp[tij]=0;
+                if(eqi(tmp,"and")) p=qq3; else if(eqi(tmp,"order")||eqi(tmp,"limit")) break; else if(*p==';') break;
+                continue;
+            }
+        }
         char col[32]={0},op[3]={0},val[64]={0};
         int i=0; while(*p&&!rsc_isspace(*p)&&*p!='='&&*p!='<'&&*p!='>'&&*p!='!'&&i<31) col[i++]=*p++;
         col[i]=0; p=skip_sp(p);
@@ -107,7 +149,7 @@ int sql_parse(const char *sql, Stmt *out){
     rsc_memset(out,0,sizeof(*out));
     rsc_strncpy(out->orig_sql, sql, 255); out->orig_sql[255]=0;
     trim(out->orig_sql);
-    char buf[1024]; rsc_strncpy(buf,sql,1023); buf[1023]=0;
+    char buf[4096]; rsc_strncpy(buf,sql,4095); buf[4095]=0;
     const char *p=skip_sp(buf);
     char first[16]={0}; int i=0; while(*p&&!rsc_isspace(*p)&&i<15) first[i++]=rsc_tolower(*p++); first[i]=0;
     if(eqi(first,"create")){
@@ -166,6 +208,26 @@ int sql_parse(const char *sql, Stmt *out){
                     char ct[16]={0}; int cti=0;
                     while(*q&&!rsc_isspace(*q)&&*q!=','&&*q!=')'&&cti<15) ct[cti++]=rsc_tolower(*q++);
                     ct[cti]=0;
+                    ColType cty=COL_TEXT; int vdims=0;
+                    if(eqi(ct,"int")) cty=COL_INT;
+                    else if(eqi(ct,"vector")||rsc_strncmp(ct,"vector",6)==0){
+                        // VECTOR[N]: attached (vector[8]) or spaced (vector [8])
+                        cty=COL_VECTOR;
+                        const char *dp=0;
+                        if(ct[6]=='[') dp=ct+7;
+                        else if(ct[6]==0){ q=skip_sp(q); if(*q=='['){ q++; const char *ds=q; int dn=0; while(*q&&rsc_isdigit(*q)&&dn<8){ dn++; q++; } char nb[8]={0}; for(int k=0;k<dn;k++) nb[k]=ds[k]; int dv=0; for(int k=0;nb[k];k++) dv=dv*10+(nb[k]-'0'); if(*q==']'){ q++; vdims=dv; } } }
+                        else { cty=COL_TEXT; }
+                        if(cty==COL_VECTOR&&!vdims){
+                            if(dp){
+                                int dv=0, dn=0;
+                                while(*dp&&rsc_isdigit(*dp)&&dn<8){ dv=dv*10+(*dp-'0'); dp++; dn++; }
+                                if(dn&&*dp==']') vdims=dv;
+                            }
+                            if(vdims<=0||vdims>RSC_VEC_MAX_DIMS) return -1;
+                        } else if(cty==COL_VECTOR){
+                            if(vdims<=0||vdims>RSC_VEC_MAX_DIMS) return -1;
+                        }
+                    }
                     int is_pk=0, is_unique=0, is_not_null=0, has_default=0, default_is_null=0;
                     char default_val[64]={0};
                     while(1){
@@ -214,7 +276,8 @@ int sql_parse(const char *sql, Stmt *out){
                     if(is_pk){ is_unique=1; is_not_null=1; }
                     if(cn[0] && out->ncols<SQL_MAX_COLS){
                         rsc_strcpy(out->cols[out->ncols].name,cn);
-                        out->cols[out->ncols].type=eqi(ct,"int")?COL_INT:COL_TEXT;
+                        out->cols[out->ncols].type=cty;
+                        out->cols[out->ncols].dims=vdims;
                         out->cols[out->ncols].is_pk=is_pk;
                         out->cols[out->ncols].is_unique=is_unique;
                         out->cols[out->ncols].is_not_null=is_not_null;
@@ -311,7 +374,7 @@ int sql_parse(const char *sql, Stmt *out){
         const char *q=p; char tok[16]={0}; // skip "into"
         // naive: find table name after "into"
         // search for "into"
-        const char *search=buf; char low[1024]; for(int k=0;buf[k];k++) low[k]=rsc_tolower(buf[k]); low[rsc_strlen(buf)]=0;
+        const char *search=buf; char low[4096]; for(int k=0;buf[k];k++) low[k]=rsc_tolower(buf[k]); low[rsc_strlen(buf)]=0;
         const char *pos=0; for(const char *t=low;*t;t++) if(t[0]=='i'&&t[1]=='n'&&t[2]=='t'&&t[3]=='o'){pos=t;break;}
         if(pos){ int off=pos-low; p=buf+off+4; }
         p=skip_sp(p); i=0; while(*p&&!rsc_isspace(*p)&&*p!='('&&*p!='v'&&i<31) out->table[i++]=*p++; out->table[i]=0;
@@ -327,6 +390,15 @@ int sql_parse(const char *sql, Stmt *out){
             out->vals_is_null[cur]=0; out->vals_is_default[cur]=0;
             p=skip_sp(p); if(*p==',') {p++; continue;} if(*p==')') break;
             if(*p=='\''){p++; i=0; while(*p&&*p!='\''&&i<63) out->vals[cur][i++]=*p++; out->vals[cur][i]=0; if(*p=='\'') p++; }
+            else if(*p=='['){
+                // unquoted vector literal: commas inside do not separate VALUES
+                p++; i=0;
+                while(*p&&*p!=']'&&*p!=')'&&i<vec_limit-1) out->vals[cur][i++]=*p++;
+                out->vals[cur][i]=0;
+                if(*p==']') p++;
+                else return -1;
+                trim(out->vals[cur]);
+            }
             else {
                 i=0; while(*p&&*p!=','&&*p!=')'&&i<63) out->vals[cur][i++]=*p++;
                 out->vals[cur][i]=0; trim(out->vals[cur]);
@@ -340,7 +412,7 @@ int sql_parse(const char *sql, Stmt *out){
         return 0;
     } else if(eqi(first,"select")){
         out->kind=STMT_SELECT;
-        char low[1024]; for(int k=0;buf[k];k++) low[k]=rsc_tolower(buf[k]); low[rsc_strlen(buf)]=0;
+        char low[4096]; for(int k=0;buf[k];k++) low[k]=rsc_tolower(buf[k]); low[rsc_strlen(buf)]=0;
         const char *from=0; for(const char *t=low;*t;t++) if(t[0]=='f'&&t[1]=='r'&&t[2]=='o'&&t[3]=='m'){from=t;break;}
         {
             int sel_start=(int)(p-buf);
@@ -423,14 +495,14 @@ int sql_parse(const char *sql, Stmt *out){
             char nxt[8]={0}; int ti=0; const char *qq=p; while(*qq&&!rsc_isspace(*qq)&&ti<7) nxt[ti++]=rsc_tolower(*qq++); nxt[ti]=0;
             if(eqi(nxt,"where")){ p=qq; p=skip_sp(p); // parse where until order/limit/;
                 // need to slice where part
-                char where_buf[512]={0}; int wi=0;
+                char where_buf[2048]={0}; int wi=0;
                 // copy until order/limit/;
                 const char *wp=p;
                 // find order/limit pos in low
                 int where_start=p-buf;
                 int where_end=rsc_strlen(buf);
                 for(const char *t=low+where_start;*t;t++){ if((t[0]=='o'&&t[1]=='r'&&t[2]=='d'&&t[3]=='e'&&t[4]=='r')||(t[0]=='l'&&t[1]=='i'&&t[2]=='m'&&t[3]=='i'&&t[4]=='t')||*t==';'){ where_end=t-low; break; } }
-                for(int k=where_start;k<where_end&&wi<511;k++) where_buf[wi++]=buf[k]; where_buf[wi]=0;
+                for(int k=where_start;k<where_end&&wi<2047;k++) where_buf[wi++]=buf[k]; where_buf[wi]=0;
                 parse_where(where_buf,out);
                 p=buf+where_end;
             }
@@ -449,22 +521,23 @@ int sql_parse(const char *sql, Stmt *out){
         return 0;
     } else if(eqi(first,"delete")){
         out->kind=STMT_DELETE;
-        char low[1024]; for(int k=0;buf[k];k++) low[k]=rsc_tolower(buf[k]); low[rsc_strlen(buf)]=0;
+        char low[4096]; for(int k=0;buf[k];k++) low[k]=rsc_tolower(buf[k]); low[rsc_strlen(buf)]=0;
         const char *from=0; for(const char *t=low;*t;t++) if(t[0]=='f'&&t[1]=='r'&&t[2]=='o'&&t[3]=='m'){from=t;break;}
         if(from){ int off=from-low; p=buf+off+4; p=skip_sp(p); i=0; while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<31) out->table[i++]=*p++; out->table[i]=0; p=skip_sp(p);
             char nxt[8]={0}; int ti=0; const char *qq=p; while(*qq&&!rsc_isspace(*qq)&&ti<7) nxt[ti++]=rsc_tolower(*qq++); nxt[ti]=0;
-            if(eqi(nxt,"where")){ p=qq; char wb[512]={0}; int wi=0; int ws=p-buf; int we=rsc_strlen(buf); for(int k=ws;k<we&&wi<511;k++) wb[wi++]=buf[k]; wb[wi]=0; parse_where(wb,out); }
+            if(eqi(nxt,"where")){ p=qq; char wb[2048]={0}; int wi=0; int ws=p-buf; int we=rsc_strlen(buf); for(int k=ws;k<we&&wi<2047;k++) wb[wi++]=buf[k]; wb[wi]=0; parse_where(wb,out); }
         }
         return 0;
     } else if(eqi(first,"update")){
         out->kind=STMT_UPDATE;
         p=skip_sp(p); i=0; while(*p&&!rsc_isspace(*p)&&i<31) out->table[i++]=*p++; out->table[i]=0;
-        char low[1024]; for(int k=0;buf[k];k++) low[k]=rsc_tolower(buf[k]); low[rsc_strlen(buf)]=0;
+        char low[4096]; for(int k=0;buf[k];k++) low[k]=rsc_tolower(buf[k]); low[rsc_strlen(buf)]=0;
         const char *set=0; for(const char *t=low;*t;t++) if(t[0]=='s'&&t[1]=='e'&&t[2]=='t'){set=t;break;}
         if(set){ int off=set-low; p=buf+off+3; p=skip_sp(p); // parse col=val
-            char col[32]={0},val[64]={0}; i=0; while(*p&&*p!='='&&i<31) col[i++]=*p++; col[i]=0; trim(col); if(*p=='=') p++; p=skip_sp(p);
+            char col[32]={0},val[RSC_VEC_MAX]={0}; i=0; while(*p&&*p!='='&&i<31) col[i++]=*p++; col[i]=0; trim(col); if(*p=='=') p++; p=skip_sp(p);
             int quoted=0;
             if(*p=='\''){quoted=1; p++; i=0; while(*p&&*p!='\''&&i<63) val[i++]=*p++; val[i]=0; if(*p=='\'') p++;}
+            else if(*p=='['){quoted=1; p++; i=0; while(*p&&*p!=']'&&*p!=';'&&i<vec_limit-1) val[i++]=*p++; val[i]=0; if(*p==']') p++; else return -1; trim(val);}
             else {i=0; while(*p&&!rsc_isspace(*p)&&*p!=';'&&i<63) val[i++]=*p++; val[i]=0;} trim(val);
             // store as first val with col name in where? reuse vals
             rsc_strcpy(out->cols[0].name,col); rsc_strcpy(out->vals[0],val); out->ncols=1; out->nvals=1;
@@ -475,7 +548,7 @@ int sql_parse(const char *sql, Stmt *out){
                 else if(eqi(vl,"default")) out->vals_is_default[0]=1;
             }
             // where
-            for(const char *t=low+(p-buf);*t;t++) if(t[0]=='w'&&t[1]=='h'&&t[2]=='e'&&t[3]=='r'&&t[4]=='e'){ int off2=t-low; p=buf+off2+5; char wb[512]={0}; int wi=0; int ws=p-buf; int we=rsc_strlen(buf); for(int k=ws;k<we&&wi<511;k++) wb[wi++]=buf[k]; wb[wi]=0; parse_where(wb,out); break; }
+            for(const char *t=low+(p-buf);*t;t++) if(t[0]=='w'&&t[1]=='h'&&t[2]=='e'&&t[3]=='r'&&t[4]=='e'){ int off2=t-low; p=buf+off2+5; char wb[2048]={0}; int wi=0; int ws=p-buf; int we=rsc_strlen(buf); for(int k=ws;k<we&&wi<2047;k++) wb[wi++]=buf[k]; wb[wi]=0; parse_where(wb,out); break; }
         }
         return 0;
     }
