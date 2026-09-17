@@ -52,6 +52,7 @@ void rsc_enable_debug(int on);
 int rsc_debug_enabled();
 void rsc_set_vector_limit(int n);
 int rsc_get_vector_limit(void);
+usize rsc_db_size(void);
 #define RSC_MAX_ROWS 256
 typedef struct {
     int ncols;

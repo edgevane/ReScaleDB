@@ -13,7 +13,9 @@ struct Pager {
 #[repr(C)]
 struct Db {
     pager: *mut Pager,
-    _opaque: [u8; 32100],
+    // Must cover C sizeof(Db) (currently 33040). See db_size_covered test
+    // which fails the build if C grows past this.
+    _opaque: [u8; 33200],
 }
 
 #[repr(C)]
@@ -31,6 +33,7 @@ extern "C" {
     fn db_exec(db: *mut Db, sql: *const c_char, out: *mut c_char, cap: usize) -> i32;
     fn db_query(db: *mut Db, sql: *const c_char, res: *mut RscResult) -> i32;
     fn rsc_enable_debug(on: i32);
+    fn rsc_db_size() -> c_ulong;
 }
 
 pub struct QueryResult {
@@ -131,6 +134,16 @@ impl Drop for Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn db_size_covered() {
+        let need = unsafe { rsc_db_size() } as usize;
+        assert!(
+            std::mem::size_of::<Db>() >= need,
+            "Rust Db ({}B) smaller than C sizeof(Db) ({}B)",
+            std::mem::size_of::<Db>(),
+            need
+        );
+    }
     #[test]
     fn basic() {
         let mut db = Database::new().unwrap();

@@ -84,6 +84,9 @@ int db_init(Db *db){
     return 0;
 }
 int db_close(Db *db){ if(db->pager) pager_close(db->pager); return 0; }
+// Lets foreign bindings (which mirror Db opaquely) verify their
+// allocation covers sizeof(Db). Must stay in sync with struct Db.
+usize rsc_db_size(void){ return sizeof(Db); }
 int sql_exec_stmt(Db *db, Stmt *s, char *out, usize cap);
 int db_exec(Db *db, const char *sql, char *out, usize out_cap){
     if(!db||!sql||!out) { if(rsc_debug_enabled()) rsc_debug("ERR null arg"); return -1; }
