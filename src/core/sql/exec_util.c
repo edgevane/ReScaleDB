@@ -386,7 +386,9 @@ int eval_cossim_row(Table *t, u8 *row, int col, const float *q, int qn, float th
     if(qn!=t->cols[col].dims) return 0;
     float cur[RSC_VEC_MAX_DIMS];
     if(row_vec_get(t,row,col,cur,t->cols[col].dims)!=t->cols[col].dims) return 0;
-    return vec_cosine_dist(cur,q,t->cols[col].dims)<=thresh;
+    // epsilon: float32 rounding makes self-distance ~1e-8, so an exact
+    // match would fail a threshold of 0 without tolerance.
+    return vec_cosine_dist(cur,q,t->cols[col].dims)<=thresh+1e-6f;
 }
 // Validate s->has_cossim against table; parse query+threshold. 0 ok, -1 + ERR.
 int cossim_prepare(Db *db, Stmt *s, Table *t, char *out, usize cap, float *qf, int *qn, float *thresh, int *qcol){

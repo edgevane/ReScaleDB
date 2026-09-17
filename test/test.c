@@ -119,6 +119,8 @@ int main(){
     ASSERT(db_exec(&vv,"INSERT INTO docs VALUES (3, [0.7,0.7,0.0])",out,sizeof(out))==0,"vec i3");
     db_exec(&vv,"SELECT * FROM docs WHERE cossim(v, [1.0,0.0,0.0], 0.1)",out,sizeof(out));
     ASSERT(strstr(out,"| 1 ")!=0 && strstr(out,"| 2 ")==0 && strstr(out,"| 3 ")==0,"vec cossim narrow");
+    db_exec(&vv,"SELECT * FROM docs WHERE cossim(v, [1.0,0.0,0.0], 0)",out,sizeof(out));
+    ASSERT(strstr(out,"| 1 ")!=0 && strstr(out,"| 3 ")==0,"vec exact match thresh 0");
     db_exec(&vv,"SELECT * FROM docs WHERE cossim(v, [1.0,0.0,0.0], 0.5)",out,sizeof(out));
     ASSERT(strstr(out,"| 1 ")!=0 && strstr(out,"| 3 ")!=0 && strstr(out,"| 2 ")==0,"vec cossim wide");
     ASSERT(db_exec(&vv,"INSERT INTO docs VALUES (4, [1.0,0.0])",out,sizeof(out))!=0,"vec dims mismatch");
