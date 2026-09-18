@@ -316,11 +316,30 @@ void format_float(float f, char *dst, int cap){
     for(int k=0;k<6&&pos<cap-1;k++){ dst[pos++]='0'+(fp/div); fp%=div; div/=10; }
     dst[pos]=0;
 }
+static double dsqrt_d(double a){
+    if(!(a>0)) return 0;
+    union { double d; u64 u; } v = {a};
+    int exp = (int)((v.u>>52)&0x7FFu);
+    if(exp==0x7FF) return 0;
+    if(exp==0){
+        v.d = a * 4503599627370496.0;
+        exp = (int)((v.u>>52)&0x7FFu);
+        int ne = ((exp-1023-52)>>1)+1023;
+        v.u = ((u64)(ne)<<52) | (v.u & 0xFFFFFFFFFFFFFull);
+        double x = v.d;
+        for(int i=0;i<20;i++){ double nx=0.5*(x+a/x); if(nx==x) break; x=nx; }
+        return x;
+    }
+    int ne = ((exp-1023)>>1)+1023;
+    union { double d; u64 u; } g;
+    g.u = ((u64)ne<<52);
+    double x = g.d;
+    for(int i=0;i<20;i++){ double nx=0.5*(x+a/x); if(nx==x) break; x=nx; }
+    return x;
+}
 float fsqrt_f(float a){
     if(a<=0) return 0;
-    double x=(double)a;
-    for(int i=0;i<100;i++){ double nx=0.5*(x+(double)a/x); if(nx==x) break; x=nx; }
-    return (float)x;
+    return (float)dsqrt_d((double)a);
 }
 // Parse "1.0, 2.5, -3e2" into out[]. Returns count or -1.
 int vec_parse(const char *s, float *out, int maxn){
@@ -375,8 +394,8 @@ float vec_cosine_dist(const float *a, const float *b, int n){
     double dot=0, na=0, nb=0;
     for(int i=0;i<n;i++){ dot+=(double)a[i]*(double)b[i]; na+=(double)a[i]*(double)a[i]; nb+=(double)b[i]*(double)b[i]; }
     if(na==0||nb==0) return 1.0f;
-    double sim=dot/((double)fsqrt_f((float)na)*(double)fsqrt_f((float)nb));
-    if(sim>1) sim=1; if(sim<-1) sim=-1;
+    double sim=dot/(dsqrt_d(na)*dsqrt_d(nb));
+    if(sim>1.0) sim=1.0; if(sim<-1.0) sim=-1.0;
     return (float)(1.0-sim);
 }
 int eval_cossim_row(Table *t, u8 *row, int col, const float *q, int qn, float thresh){

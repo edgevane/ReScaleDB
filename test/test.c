@@ -144,6 +144,9 @@ int main(){
     { char *p1=strstr(out,"| 1 "), *p3=strstr(out,"| 3 ");
       ASSERT(p1&&p3&&p1<p3,"vec top-k order"); }
     ASSERT(db_exec(&vv,"SELECT * FROM docs WHERE cossim(v, [1.0,0.0,0.0], 0.5, 0)",out,sizeof(out))!=0,"vec top-k 0 rejected");
+    ASSERT(db_exec(&vv,"INSERT INTO docs VALUES (9, [100000000000000000000.0,100000000000000000000.0,0.0])",out,sizeof(out))==0,"vec large i");
+    db_exec(&vv,"SELECT * FROM docs WHERE cossim(v, [100000000000000000000.0,100000000000000000000.0,0.0], 0)",out,sizeof(out));
+    ASSERT(strstr(out,"| 9 ")!=0,"vec large self-match thresh 0");
     db_close(&vv);
     Pager p2; pager_open(&p2,"/tmp/bt_test.rsc.db");
     u64 root=0; btree_create(&p2,&root);
