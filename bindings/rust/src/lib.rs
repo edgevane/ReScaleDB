@@ -13,9 +13,9 @@ struct Pager {
 #[repr(C)]
 struct Db {
     pager: *mut Pager,
-    // Must cover C sizeof(Db) (currently 33040). See db_size_covered test
+    // Must cover C sizeof(Db) (currently 34064). See db_size_covered test
     // which fails the build if C grows past this.
-    _opaque: [u8; 33200],
+    _opaque: [u8; 34304],
 }
 
 #[repr(C)]

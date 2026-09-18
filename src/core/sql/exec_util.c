@@ -11,7 +11,9 @@ int parse_float(const char *s, float *out);
 void format_float(float f, char *dst, int cap);
 float fsqrt_f(float a);
 int vec_parse(const char *s, float *out, int maxn);
-int vec_encode_str(const char *s, int dims, u8 *out);
+int vec_encode_str(const char *s, int dims, int quant, u8 *out);
+int vec_storage_bytes(int dims, int quant);
+const char *vec_quant_name(int quant);
 int row_vec_get(Table *t, u8 *row, int col, float *out, int maxn);
 float vec_cosine_dist(const float *a, const float *b, int n);
 int eval_cossim_row(Table *t, u8 *row, int col, const float *q, int qn, float thresh);
@@ -67,7 +69,7 @@ u8 *row_col_ptr(Table *t, u8 *row, int col){
     for(int k=0;k<col;k++){
         if(t->has_nullmap && ((*(u16*)row>>k)&1)) continue;
         if(t->cols[k].type==COL_INT) p+=8;
-        else if(t->cols[k].type==COL_VECTOR) p+=(usize)t->cols[k].dims*4;
+        else if(t->cols[k].type==COL_VECTOR) p+=(usize)vec_storage_bytes(t->cols[k].dims,t->cols[k].quant);
         else { u16 l=*(u16*)p; p+=2+l; }
     }
     return p;
@@ -82,14 +84,14 @@ void row_cell_str(Table *t, u8 *row, int col, char *dst, int *isnull){
         if(v==0) rev[rp++]='0'; while(v>0){rev[rp++]='0'+(v%10); v/=10;} if(neg) rev[rp++]='-';
         for(int k=rp-1;k>=0;k--) dst[pos++]=rev[k]; dst[pos]=0;
     } else if(t->cols[col].type==COL_VECTOR){
-        // display as [f,f,...], truncated to 63 chars like TEXT
+        // display as [f,f,...], truncated to 63 chars like TEXT (dequantized)
         int dims=t->cols[col].dims;
+        float dec[RSC_VEC_MAX_DIMS];
+        if(row_vec_get(t,row,col,dec,dims)!=dims){ dst[0]=0; return; }
         int pos=0;
         if(pos<63) dst[pos++]='[';
         for(int d=0;d<dims && pos<63;d++){
-            u32 bits=0; for(int k=0;k<4;k++) bits|=(u32)p[d*4+k]<<(k*8);
-            union { u32 u; float f; } cv; cv.u=bits;
-            char fb[32]; format_float(cv.f,fb,sizeof(fb));
+            char fb[32]; format_float(dec[d],fb,sizeof(fb));
             if(d>0 && pos<63) dst[pos++]=',';
             for(int k=0;fb[k]&&pos<63;k++) dst[pos++]=fb[k];
         }
@@ -114,8 +116,8 @@ int encode_row_new(Table *t, char vals[16][RSC_VEC_MAX], int is_null[16], u8 *ou
             long v=parse_int_val(vals[i]);
             for(int k=0;k<8;k++) out[off++]=(u8)((v>>(k*8))&0xFF);
         } else if(t->cols[i].type==COL_VECTOR){
-            if(vec_encode_str(vals[i],t->cols[i].dims,out+off)!=0) return -1;
-            off+=t->cols[i].dims*4;
+            if(vec_encode_str(vals[i],t->cols[i].dims,t->cols[i].quant,out+off)!=0) return -1;
+            off+=vec_storage_bytes(t->cols[i].dims,t->cols[i].quant);
         } else {
             usize l=rsc_strlen(vals[i]); if(l>255) l=255;
             *(u16*)(out+off)=(u16)l; off+=2;
@@ -130,8 +132,8 @@ int col_value_exists(Db *db, Table *t, int col, const char *val_str){
     u8 want_vec[RSC_VEC_MAX_DIMS*4]; int want_vec_len=0;
     if(t->cols[col].type==COL_INT) want_int=parse_int_val(val_str);
     else if(t->cols[col].type==COL_VECTOR){
-        if(vec_encode_str(val_str,t->cols[col].dims,want_vec)!=0) return 0;
-        want_vec_len=t->cols[col].dims*4;
+        if(vec_encode_str(val_str,t->cols[col].dims,t->cols[col].quant,want_vec)!=0) return 0;
+        want_vec_len=vec_storage_bytes(t->cols[col].dims,t->cols[col].quant);
     }
     u64 pn=t->root;
     while(pn){
@@ -362,18 +364,201 @@ int vec_parse(const char *s, float *out, int maxn){
     }
     return n;
 }
-// Encode "1.0,2.0" into dims*4 LE float32 bytes. 0 ok, -1 bad/count mismatch.
-int vec_encode_str(const char *s, int dims, u8 *out){
+int vec_storage_bytes(int dims, int quant){
+    if(dims<=0) return 0;
+    if(dims>RSC_VEC_MAX_DIMS) dims=RSC_VEC_MAX_DIMS;
+    switch(quant){
+        case VQ_FP16: return dims*2;
+        case VQ_Q8: return 4+dims;
+        case VQ_Q4: return 4+(dims+1)/2;
+        case VQ_Q2: return 4+(dims+3)/4;
+        case VQ_Q1: return 4+(dims+7)/8;
+        default: return dims*4;
+    }
+}
+const char *vec_quant_name(int quant){
+    switch(quant){
+        case VQ_FP16: return "FP16";
+        case VQ_Q8: return "Q8";
+        case VQ_Q4: return "Q4";
+        case VQ_Q2: return "Q2";
+        case VQ_Q1: return "Q1";
+        default: return "FP32";
+    }
+}
+// IEEE-754 binary16, round-to-nearest-even, integer ops only (freestanding).
+static u16 f32_to_f16_bits(float f){
+    union { float f; u32 u; } v; v.f=f;
+    u32 x=v.u;
+    u32 sign=(x>>16)&0x8000u;
+    u32 exp=(x>>23)&0xFFu;
+    u32 mant=x&0x7FFFFFu;
+    if(exp==255u){
+        if(mant==0) return (u16)(sign|0x7C00u);
+        return (u16)(sign|0x7E00u);
+    }
+    int he=(int)exp-112;
+    if(he>=31) return (u16)(sign|0x7C00u);
+    if(he<=0){
+        if(he<-10) return (u16)sign;
+        mant|=0x800000u;
+        int shift=14-he;
+        u32 half=mant>>shift;
+        u32 rem=mant&(((u32)1<<shift)-1u);
+        u32 halfway=(u32)1<<(shift-1);
+        if(rem>halfway||(rem==halfway&&(half&1u))) half++;
+        return (u16)(sign|half);
+    }
+    u32 half=((u32)he<<10)|(mant>>13);
+    u32 rem=mant&0x1FFFu;
+    if(rem>0x1000u||(rem==0x1000u&&(half&1u))) half++;
+    return (u16)(sign|half);
+}
+static float f16_bits_to_f32(u16 h){
+    u32 sign=((u32)h&0x8000u)<<16;
+    u32 exp=(((u32)h>>10)&0x1Fu);
+    u32 mant=(u32)h&0x3FFu;
+    u32 f;
+    if(exp==0){
+        if(mant==0) f=sign;
+        else {
+            int e=113;
+            while(!(mant&0x400u)){ mant<<=1; e--; }
+            mant&=0x3FFu;
+            f=sign|((u32)e<<23)|(mant<<13);
+        }
+    } else if(exp==31){
+        f=sign|0x7F800000u|(mant<<13);
+    } else {
+        f=sign|((exp+112u)<<23)|(mant<<13);
+    }
+    union { u32 u; float f; } v; v.u=f;
+    return v.f;
+}
+static void store_f32_le(u8 *out, float f){
+    union { float f; u32 u; } c; c.f=f;
+    out[0]=(u8)(c.u&0xFF); out[1]=(u8)((c.u>>8)&0xFF);
+    out[2]=(u8)((c.u>>16)&0xFF); out[3]=(u8)((c.u>>24)&0xFF);
+}
+static float load_f32_le(const u8 *p){
+    u32 b=(u32)p[0]|((u32)p[1]<<8)|((u32)p[2]<<16)|((u32)p[3]<<24);
+    union { u32 u; float f; } c; c.u=b;
+    return c.f;
+}
+// Q2 codebook: symmetric 4 levels, ties resolve to the lower index.
+static double q2_level(int code){
+    static const double lv[4]={-1.0,-0.3333333333333333,0.3333333333333333,1.0};
+    if(code<0) code=0; if(code>3) code=3;
+    return lv[code];
+}
+// Encode "1.0,2.0" into vec_storage_bytes(dims,quant) bytes. 0 ok, -1 bad.
+// FP32/FP16 are direct; Q8/Q4/Q2/Q1 store an FP32-LE scale (max abs,
+// 0 when the vector is all zeros) followed by packed codes.
+int vec_encode_str(const char *s, int dims, int quant, u8 *out){
     if(dims<=0||dims>RSC_VEC_MAX_DIMS) return -1;
+    if(quant<VQ_FP32||quant>VQ_Q1) quant=VQ_FP32;
     float tmp[RSC_VEC_MAX_DIMS];
     int n=vec_parse(s,tmp,dims);
     if(n!=dims) return -1;
+    if(quant==VQ_FP32){
+        for(int i=0;i<dims;i++) store_f32_le(out+i*4,tmp[i]);
+        return 0;
+    }
+    if(quant==VQ_FP16){
+        for(int i=0;i<dims;i++){
+            u16 h=f32_to_f16_bits(tmp[i]);
+            out[i*2]=(u8)(h&0xFF); out[i*2+1]=(u8)((h>>8)&0xFF);
+        }
+        return 0;
+    }
+    double mx=0;
+    for(int i=0;i<dims;i++){ double a=(double)tmp[i]; if(a<0) a=-a; if(a>mx) mx=a; }
+    float scale=(float)mx;
+    store_f32_le(out,scale);
+    u8 *d=out+4;
+    int paylen=vec_storage_bytes(dims,quant)-4;
+    for(int i=0;i<paylen;i++) d[i]=0;
+    if(scale==0) return 0;
+    if(quant==VQ_Q8){
+        for(int i=0;i<dims;i++){
+            double nrm=(double)tmp[i]/(double)scale;
+            if(nrm>1) nrm=1; if(nrm<-1) nrm=-1;
+            int q=(int)(nrm*127.0+(nrm>=0?0.5:-0.5));
+            if(q>127) q=127; if(q<-127) q=-127;
+            d[i]=(u8)(q&0xFF);
+        }
+        return 0;
+    }
+    if(quant==VQ_Q4){
+        for(int i=0;i<dims;i++){
+            double nrm=(double)tmp[i]/(double)scale;
+            if(nrm>1) nrm=1; if(nrm<-1) nrm=-1;
+            int q=(int)(nrm*7.0+(nrm>=0?0.5:-0.5));
+            if(q>7) q=7; if(q<-7) q=-7;
+            if((i&1)==0) d[i>>1]=(u8)(d[i>>1]|(q&0xF));
+            else d[i>>1]=(u8)(d[i>>1]|((q&0xF)<<4));
+        }
+        return 0;
+    }
+    if(quant==VQ_Q2){
+        for(int i=0;i<dims;i++){
+            double nrm=(double)tmp[i]/(double)scale;
+            if(nrm>1) nrm=1; if(nrm<-1) nrm=-1;
+            int best=0; double bd=4.0;
+            for(int k=0;k<4;k++){ double dd=nrm-q2_level(k); if(dd<0) dd=-dd; if(dd<bd){ bd=dd; best=k; } }
+            d[i>>2]=(u8)(d[i>>2]|(best<<(2*(i&3))));
+        }
+        return 0;
+    }
     for(int i=0;i<dims;i++){
-        union { float f; u32 u; } c; c.f=tmp[i];
-        out[i*4+0]=(u8)(c.u&0xFF); out[i*4+1]=(u8)((c.u>>8)&0xFF);
-        out[i*4+2]=(u8)((c.u>>16)&0xFF); out[i*4+3]=(u8)((c.u>>24)&0xFF);
+        int bit=(tmp[i]>=0)?1:0;
+        d[i>>3]=(u8)(d[i>>3]|(bit<<(i&7)));
     }
     return 0;
+}
+static int vec_decode_payload(const u8 *p, int dims, int quant, float *out){
+    if(quant<VQ_FP32||quant>VQ_Q1) quant=VQ_FP32;
+    if(quant==VQ_FP32){
+        for(int i=0;i<dims;i++) out[i]=load_f32_le(p+i*4);
+        return dims;
+    }
+    if(quant==VQ_FP16){
+        for(int i=0;i<dims;i++){
+            u16 h=(u16)((u16)p[i*2]|((u16)p[i*2+1]<<8));
+            out[i]=f16_bits_to_f32(h);
+        }
+        return dims;
+    }
+    float scale=load_f32_le(p);
+    const u8 *d=p+4;
+    if(quant==VQ_Q8){
+        for(int i=0;i<dims;i++){
+            int q=(int)((signed char)d[i]);
+            out[i]=(float)((double)q/127.0*(double)scale);
+        }
+        return dims;
+    }
+    if(quant==VQ_Q4){
+        for(int i=0;i<dims;i++){
+            u8 b=d[i>>1];
+            int q=((i&1)==0)?(b&0xF):((b>>4)&0xF);
+            if(q&8) q-=16;
+            out[i]=(float)((double)q/7.0*(double)scale);
+        }
+        return dims;
+    }
+    if(quant==VQ_Q2){
+        for(int i=0;i<dims;i++){
+            int code=(d[i>>2]>>(2*(i&3)))&3;
+            out[i]=(float)(q2_level(code)*(double)scale);
+        }
+        return dims;
+    }
+    for(int i=0;i<dims;i++){
+        int bit=(d[i>>3]>>(i&7))&1;
+        out[i]=bit?scale:-scale;
+    }
+    return dims;
 }
 int row_vec_get(Table *t, u8 *row, int col, float *out, int maxn){
     if(col<0||col>=t->ncols) return -1;
@@ -382,13 +567,7 @@ int row_vec_get(Table *t, u8 *row, int col, float *out, int maxn){
     int dims=t->cols[col].dims;
     if(dims>maxn) return -1;
     u8 *p=row_col_ptr(t,row,col);
-    for(int i=0;i<dims;i++){
-        u32 bits=0;
-        for(int k=0;k<4;k++) bits|=(u32)p[i*4+k]<<(k*8);
-        union { u32 u; float f; } c; c.u=bits;
-        out[i]=c.f;
-    }
-    return dims;
+    return vec_decode_payload(p,dims,t->cols[col].quant,out);
 }
 float vec_cosine_dist(const float *a, const float *b, int n){
     double dot=0, na=0, nb=0;
@@ -442,8 +621,8 @@ int row_replace_col(Table *t, u8 *oldrow, int oldlen, int col, const char *newva
             long v=parse_int_val(newval);
             for(int k=0;k<8;k++) field[flen++]=(u8)((v>>(k*8))&0xFF);
         } else if(t->cols[col].type==COL_VECTOR){
-            if(vec_encode_str(newval,t->cols[col].dims,field)!=0) return -1;
-            flen=t->cols[col].dims*4;
+            if(vec_encode_str(newval,t->cols[col].dims,t->cols[col].quant,field)!=0) return -1;
+            flen=vec_storage_bytes(t->cols[col].dims,t->cols[col].quant);
         } else {
             usize l=rsc_strlen(newval); if(l>255) l=255;
             field[0]=(u8)(l&0xFF); field[1]=(u8)((l>>8)&0xFF); flen=2;
@@ -457,13 +636,13 @@ int row_replace_col(Table *t, u8 *oldrow, int oldlen, int col, const char *newva
     for(int k=0;k<col;k++){
         if(t->has_nullmap&&((*(u16*)oldrow>>k)&1)) continue;
         if(t->cols[k].type==COL_INT) off+=8;
-        else if(t->cols[k].type==COL_VECTOR) off+=(int)t->cols[k].dims*4;
+        else if(t->cols[k].type==COL_VECTOR) off+=(int)vec_storage_bytes(t->cols[k].dims,t->cols[k].quant);
         else { u16 l=*(u16*)(oldrow+off); off+=2+l; }
     }
     int oldflen=0;
     if(!(t->has_nullmap&&((*(u16*)oldrow>>col)&1))){
         if(t->cols[col].type==COL_INT) oldflen=8;
-        else if(t->cols[col].type==COL_VECTOR) oldflen=(int)t->cols[col].dims*4;
+        else if(t->cols[col].type==COL_VECTOR) oldflen=(int)vec_storage_bytes(t->cols[col].dims,t->cols[col].quant);
         else oldflen=2+*(u16*)(oldrow+off);
     }
     if(off+oldflen>oldlen) return -1;

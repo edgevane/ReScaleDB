@@ -38,6 +38,7 @@ int exec_ddl(Db *db, Stmt *s, char *out, usize cap){
         for(int i=0;i<s->ncols;i++){
             if(s->cols[i].type==COL_VECTOR){
                 if(s->cols[i].dims<=0||s->cols[i].dims>RSC_VEC_MAX_DIMS){ if(out&&cap) rsc_strcpy(out,"ERR invalid VECTOR dims\n"); return -1; }
+                if(s->cols[i].quant<0||s->cols[i].quant>5) s->cols[i].quant=0;
                 if(s->cols[i].is_pk){ if(out&&cap) rsc_strcpy(out,"ERR PRIMARY KEY on VECTOR not supported\n"); return -1; }
                 if(s->cols[i].has_default){ if(out&&cap) rsc_strcpy(out,"ERR DEFAULT on VECTOR not supported\n"); return -1; }
             }

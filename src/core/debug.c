@@ -65,7 +65,14 @@ static void print_table_info(Db *db, const char *tname, Table *t){
         w(t->cols[i].name);
         w("  ");
         w(coltype_name(t->cols[i].type));
-        if(t->cols[i].type==COL_VECTOR){ w("["); wint(t->cols[i].dims); w("]"); }
+        if(t->cols[i].type==COL_VECTOR){
+            w("["); wint(t->cols[i].dims); w("]");
+            if(t->cols[i].quant==1) w(" AS FP16");
+            else if(t->cols[i].quant==2) w(" AS Q8");
+            else if(t->cols[i].quant==3) w(" AS Q4");
+            else if(t->cols[i].quant==4) w(" AS Q2");
+            else if(t->cols[i].quant==5) w(" AS Q1");
+        }
         if(i==t->pk_col) w("  PRIMARY KEY");
         if(t->cols[i].is_unique && i!=t->pk_col) w("  UNIQUE");
         if(t->cols[i].is_not_null && i!=t->pk_col) w("  NOT NULL");

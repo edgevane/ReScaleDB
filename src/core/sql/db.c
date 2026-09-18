@@ -20,6 +20,7 @@ static void db_save_catalog(Db *db){
             *(u32*)p=(u32)t->cols[c].has_default; p+=4;
             *(u32*)p=(u32)t->cols[c].default_is_null; p+=4;
             rsc_memcpy(p,t->cols[c].default_val,64); p+=64;
+            *(u32*)p=(u32)t->cols[c].quant; p+=4;
         }
         *(u64*)p=t->root; p+=8;
         *(u64*)p=t->rowid_seq; p+=8;
@@ -54,6 +55,7 @@ void db_load_catalog(Db *db){
                 t->cols[c].has_default=(int)*(u32*)p; p+=4;
                 t->cols[c].default_is_null=(int)*(u32*)p; p+=4;
                 rsc_memcpy(t->cols[c].default_val,p,64); p+=64;
+                if(ver>=5){ t->cols[c].quant=(int)*(u32*)p; p+=4; if(t->cols[c].quant<0||t->cols[c].quant>5) t->cols[c].quant=0; }
             }
         }
         t->root=*(u64*)p; p+=8;

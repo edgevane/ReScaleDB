@@ -56,12 +56,42 @@ Rules:
 
 ```sql
 CREATE TABLE docs(id INT PRIMARY KEY, v VECTOR[128]);
+CREATE TABLE docs_q(id INT PRIMARY KEY, v VECTOR[128] AS Q8);
 INSERT INTO docs VALUES (1, [0.1,0.2,0.3]);
 SELECT * FROM docs WHERE cossim(v, [0.1,0.2,0.4], 0.1);
 ```
 
-- `VECTOR[N]` stores `N` float32 components (`1`–`255`; one row holds
-  ~1000 bytes total, so `N * 4` plus the other columns must fit).
+Storage precision (default `FP32` when `AS` is omitted):
+
+| Type   | Bytes / row (`N` dims) | Format                                |
+|--------|------------------------|---------------------------------------|
+| `FP32` | `N * 4`                | float32 little-endian                 |
+| `FP16` | `N * 2`                | IEEE binary16, round-to-nearest-even  |
+| `Q8`   | `N + 4`                | FP32 scale + int8 symmetric           |
+| `Q4`   | `ceil(N / 2) + 4`      | FP32 scale + 4-bit nibbles (-7..7)    |
+| `Q2`   | `ceil(N / 4) + 4`      | FP32 scale + 2-bit levels ±1 / ±1/3   |
+| `Q1`   | `ceil(N / 8) + 4`      | FP32 scale + sign bit (±scale)        |
+
+Rules:
+
+- `Q8`/`Q4`/`Q2`/`Q1` store one FP32 scale (`max abs`, `0` for all-zero
+  vectors) per row, then packed codes. `Q1` maps `0` to `+scale`,
+  `Q2` ties resolve to the lower level. All rounding is deterministic,
+  so equal literals encode to equal bytes.
+- Literals stay float (`[1.0,2.0,...]`); quantization happens on
+  `INSERT`/`UPDATE`. `SELECT` output and `db_query` cells show
+  dequantized floats.
+- Cosine compares the dequantized row against the full-precision query
+  vector. Lossy types carry quantization error: an exact self-match
+  needs a small threshold (e.g. `0.001` for `Q8`, wider for fewer
+  bits) instead of `0`.
+- `UNIQUE` on a quantized column compares stored bytes, so two
+  different literals that quantize identically count as duplicates.
+
+- `VECTOR[N]` stores `N` components (`1`–`255`; float32 by default,
+  one row holds ~1000 bytes total, so the encoded width plus the other
+  columns must fit). Append `AS FP16|Q8|Q4|Q2|Q1` for a quantized
+  column (see table above).
 - Vector literals are unquoted `[1.0,2.0,...]` (up to 1024 chars by
   default; see `rsc_set_vector_limit`). Inserts with a wrong element
   count or non-numeric elements fail with `ERR invalid vector`.

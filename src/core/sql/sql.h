@@ -9,10 +9,14 @@
 #ifndef RSC_VEC_MAX
 #define RSC_VEC_MAX 1024
 #endif
-// Max dims of VECTOR[N]: 255*4+2 bytes still fits BTREE_MAX_VAL.
+// Max dims of VECTOR[N]: 255*4+2 bytes (FP32 worst case) still fits
+// BTREE_MAX_VAL. Quantized types use fewer bytes per row.
 #define RSC_VEC_MAX_DIMS 255
 typedef enum { COL_INT, COL_TEXT, COL_VECTOR } ColType;
-typedef struct { char name[32]; ColType type; int dims; int is_pk; int is_unique; int is_not_null; int has_default; int default_is_null; char default_val[64]; } Column;
+// VECTOR storage precision. Appended at the end of Column so the
+// db_load_catalog zeroing (from is_pk to end of struct) covers it.
+typedef enum { VQ_FP32=0, VQ_FP16=1, VQ_Q8=2, VQ_Q4=3, VQ_Q2=4, VQ_Q1=5 } VecQuant;
+typedef struct { char name[32]; ColType type; int dims; int is_pk; int is_unique; int is_not_null; int has_default; int default_is_null; char default_val[64]; int quant; } Column;
 typedef struct { char name[32]; Column cols[SQL_MAX_COLS]; int ncols; int pk_col; int has_nullmap; u64 root; u64 rowid_seq; } Table;
 typedef enum { STMT_CREATE, STMT_INSERT, STMT_SELECT, STMT_UPDATE, STMT_DELETE, STMT_CREATE_IDX, STMT_CREATE_DB, STMT_DROP_DB, STMT_USE, STMT_DUMP_ALL, STMT_LOAD_ALL, STMT_UNKNOWN } StmtKind;
 typedef struct { char col[32]; char op[3]; char val[64]; int val_is_null; int is_null_check; } WhereClause;

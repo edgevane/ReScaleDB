@@ -217,7 +217,7 @@ int sql_parse(const char *sql, Stmt *out){
                     char ct[16]={0}; int cti=0;
                     while(*q&&!rsc_isspace(*q)&&*q!=','&&*q!=')'&&cti<15) ct[cti++]=rsc_tolower(*q++);
                     ct[cti]=0;
-                    ColType cty=COL_TEXT; int vdims=0;
+                    ColType cty=COL_TEXT; int vdims=0; int vquant=0;
                     if(eqi(ct,"int")) cty=COL_INT;
                     else if(eqi(ct,"vector")||rsc_strncmp(ct,"vector",6)==0){
                         // VECTOR[N]: attached (vector[8]) or spaced (vector [8])
@@ -235,6 +235,26 @@ int sql_parse(const char *sql, Stmt *out){
                             if(vdims<=0||vdims>RSC_VEC_MAX_DIMS) return -1;
                         } else if(cty==COL_VECTOR){
                             if(vdims<=0||vdims>RSC_VEC_MAX_DIMS) return -1;
+                        }
+                        if(cty==COL_VECTOR){
+                            // Optional storage precision: VECTOR[N] AS FP16|Q8|Q4|Q2|Q1|FP32
+                            const char *qa=skip_sp(q);
+                            char aw[8]={0}; int ai=0; const char *aq=qa;
+                            while(*aq&&!rsc_isspace(*aq)&&*aq!=','&&*aq!=')'&&ai<7) aw[ai++]=rsc_tolower(*aq++);
+                            aw[ai]=0;
+                            if(eqi(aw,"as")){
+                                q=skip_sp(aq);
+                                char qw[8]={0}; int qi=0;
+                                while(*q&&!rsc_isspace(*q)&&*q!=','&&*q!=')'&&qi<7) qw[qi++]=rsc_tolower(*q++);
+                                qw[qi]=0;
+                                if(eqi(qw,"fp32")) vquant=0;
+                                else if(eqi(qw,"fp16")) vquant=1;
+                                else if(eqi(qw,"q8")) vquant=2;
+                                else if(eqi(qw,"q4")) vquant=3;
+                                else if(eqi(qw,"q2")) vquant=4;
+                                else if(eqi(qw,"q1")) vquant=5;
+                                else return -1;
+                            }
                         }
                     }
                     int is_pk=0, is_unique=0, is_not_null=0, has_default=0, default_is_null=0;
@@ -287,6 +307,7 @@ int sql_parse(const char *sql, Stmt *out){
                         rsc_strcpy(out->cols[out->ncols].name,cn);
                         out->cols[out->ncols].type=cty;
                         out->cols[out->ncols].dims=vdims;
+                        out->cols[out->ncols].quant=vquant;
                         out->cols[out->ncols].is_pk=is_pk;
                         out->cols[out->ncols].is_unique=is_unique;
                         out->cols[out->ncols].is_not_null=is_not_null;
