@@ -358,7 +358,69 @@ int btree_insert(Pager *p,u64 *root,const void *key,u16 klen,const void *val,u16
     pager_sync(p);
     return 0;
 }
-int btree_delete(Pager *p,u64 *root,const void *key,u16 klen){ (void)p;(void)root;(void)key;(void)klen; return -1; }
+int btree_delete(Pager *p,u64 *root,const void *key,u16 klen){
+    if(!root||!*root) return -1;
+    u64 path[64]; int depth=0;
+    u64 pn=*root;
+    while(1){
+        BNode *n=node_get(p,pn);
+        if(!n) return -1;
+        if(depth>=64) return -1;
+        path[depth++]=pn;
+        if(n->is_leaf) break;
+        if(n->nkeys==0) return -1;
+        int lo=0,hi=n->nkeys-1,ans=n->nkeys;
+        while(lo<=hi){int mid=(lo+hi)/2; u8 *e=node_data(n)+n->offs[mid]; u16 ek=*(u16*)e; int c=key_cmp(key,klen,e+2,ek); if(c<0){ans=mid;hi=mid-1;} else lo=mid+1;}
+        u64 child;
+        if(ans==n->nkeys){
+            u8 *e=node_data(n)+n->offs[n->nkeys-1]; u16 ek=*(u16*)e; child=*(u64*)(e+2+ek+8);
+        } else { u8 *e=node_data(n)+n->offs[ans]; u16 ek=*(u16*)e; child=*(u64*)(e+2+ek); }
+        if(child==0) return -1;
+        pn=child;
+    }
+    u64 leaf_pn=path[depth-1];
+    BNode *leaf=node_get(p,leaf_pn);
+    if(!leaf) return -1;
+    int pos,found; leaf_search(leaf,key,klen,&pos,&found);
+    if(!found) return -1;
+    // COW replacement leaf without the deleted entry (may be empty).
+    u64 new_pn=pager_alloc(p);
+    if(!new_pn) return -1;
+    leaf=node_get(p,leaf_pn); // alloc may have remapped the mapping
+    BNode *nl=node_get(p,new_pn);
+    if(!leaf||!nl){ pager_free(p,new_pn); return -1; }
+    node_init(nl,1);
+    nl->next_leaf=leaf->next_leaf;
+    for(int i=0;i<leaf->nkeys;i++){
+        if(i==pos) continue;
+        u8 *oe=node_data(leaf)+leaf->offs[i];
+        u16 skl=*(u16*)oe; u16 svl=*(u16*)(oe+2);
+        if(node_insert_leaf(nl,nl->nkeys,oe+4,skl,oe+4+skl,svl)!=0){ pager_free(p,new_pn); return -1; }
+    }
+    pager_free(p,leaf_pn);
+    // COW the parent chain so no live page is modified in place.
+    u64 old_child=leaf_pn, new_child=new_pn;
+    for(int lvl=depth-2;lvl>=0;lvl--){
+        u64 new_parent=alloc_copy(p,path[lvl]);
+        if(!new_parent) return -1;
+        BNode *np=node_get(p,new_parent);
+        if(!np) return -1;
+        for(int i=0;i<np->nkeys;i++){
+            u8 *e=node_data(np)+np->offs[i];
+            u16 ek=*(u16*)e;
+            u64 *c1=(u64*)(e+2+ek);
+            u64 *c2=(u64*)(e+2+ek+8);
+            if(*c1==old_child) *c1=new_child;
+            if(*c2==old_child) *c2=new_child;
+        }
+        pager_free(p,path[lvl]);
+        old_child=path[lvl];
+        new_child=new_parent;
+    }
+    *root=new_child;
+    pager_sync(p);
+    return 0;
+}
 int btree_scan(Pager *p,u64 root,void (*cb)(const void*k,u16 kl,const void*v,u16 vl,void*ctx),void *ctx){
     u64 pn=root;
     if(!pn) return 0;

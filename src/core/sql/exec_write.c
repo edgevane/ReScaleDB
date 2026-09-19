@@ -32,7 +32,7 @@ int exec_write(Db *db, Stmt *s, char *out, usize cap){
         // go leftmost
         while(pn){ BNode *n=(BNode*)pager_get(db->pager,pn); if(!n||n->is_leaf) break; if(n->nkeys==0) break; u8 *e=(u8*)n+n->offs[0]; u16 ek=*(u16*)e; pn=*(u64*)(e+2+ek); }
         while(pn&&nk<256){ BNode *n=(BNode*)pager_get(db->pager,pn); if(!n) break; for(int i=0;i<n->nkeys;i++){ u8 *e=(u8*)n+n->offs[i]; u16 kl=*(u16*)e; u16 vl=*(u16*)(e+2); u8 *k=e+4; u8 *v=e+4+kl; int ok=1; for(int w=0;w<s->nwhere;w++) if(!eval_where(t,v,&s->where[w])){ok=0;break;} if(ok&&s->has_cossim) if(!eval_cossim_row(t,v,cossim_col,cossim_qf,cossim_qn,cossim_th)) ok=0; if(ok){ rsc_memcpy(keys[nk],k,kl); nk++; } } pn=n->next_leaf; }
-        for(int i=0;i<nk;i++) btree_delete(db->pager,&t->root,keys[i],8);
+        for(int i=0;i<nk;i++) if(btree_delete(db->pager,&t->root,keys[i],8)!=0){ if(out&&cap) rsc_strcpy(out,"ERR delete\n"); return -1; }
         if(out&&cap){ rsc_memcpy(out,"OK\n",3); out[3]=0; }
         return 0;
     }
